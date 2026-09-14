@@ -1,0 +1,41 @@
+{
+    "name": "funnelchat20/platform-gate",
+    "description": "El portero: autenticación, permisos, límites y registro de uso de las API keys del piloto de API pública.",
+    "type": "library",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.2",
+        "illuminate/support": "^11.9|^12.0",
+        "illuminate/http": "^11.9|^12.0",
+        "laravel/sanctum": "^4.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^9.0|^10.0",
+        "phpunit/phpunit": "^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Funnelchat\\PlatformGate\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Funnelchat\\PlatformGate\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Funnelchat\\PlatformGate\\PlatformGateServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "config": {
+        "platform": {
+            "php": "8.2.0"
+        },
+        "sort-packages": true
+    }
+}
