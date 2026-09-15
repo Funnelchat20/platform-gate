@@ -9,7 +9,7 @@ return [
     | Dominio
     |---------------------------------------------------------------------------
     | El nombre con el que este backend aparece en los permisos: `conversations`,
-    | `accounts`, `communities`, `whalink`. De acá salen `{dominio}:read`,
+    | `accounts`, `communities`, `wha-link`. De acá salen `{dominio}:read`,
     | `{dominio}:write` y —donde corresponda— `{dominio}:send`.
     */
     'domain' => env('PLATFORM_GATE_DOMAIN'),
@@ -23,7 +23,7 @@ return [
     |
     | Sólo tiene sentido en dominios que mandan: conversations y communities.
     | accounts encola a conversations y su audiencia es siempre el dueño de la
-    | cuenta; whalink no manda. En esos dos, esta lista va vacía.
+    | cuenta; wha-link no manda. En esos dos, esta lista va vacía.
     |
     | Patrones: "POST api/v1/message/send-message" o "api/v1/messages/*".
     | Se machean contra el URI DEFINIDO de la ruta, no contra el path del request.
