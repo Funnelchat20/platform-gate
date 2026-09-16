@@ -26,6 +26,7 @@ use Illuminate\Support\Str;
  *   send ..... rutas que producen egress a WhatsApp → {dominio}:send
  *   operate .. rutas que mutan el recurso externo de forma irreversible → {dominio}:operate
  *   denied ... superficie amplificada → NINGÚN permiso la habilita
+ *   allowed .. si se declara, invierte el default: lo no listado queda denegado
  *
  * La lista `denied` no es un permiso más estricto: es la superficie donde una llamada
  * produce N mensajes con N no acotado por el request. En conversations son diez rutas, y
@@ -51,12 +52,16 @@ final readonly class RoutePermissions
      * @param string[] $send    Patrones `METHOD uri` o `uri` que requieren `{domain}:send`.
      * @param string[] $operate Patrones que requieren `{domain}:operate`.
      * @param string[] $denied  Patrones que ningún permiso habilita.
+     * @param string[] $allowed Si NO está vacía, invierte el default: sólo estos patrones son
+     *                          alcanzables y todo lo demás cae en `denied`. Es la forma segura
+     *                          de declarar una superficie pública.
      */
     public function __construct(
         private string $domain,
         private array $send = [],
         private array $operate = [],
         private array $denied = [],
+        private array $allowed = [],
     ) {
     }
 
@@ -82,6 +87,14 @@ final readonly class RoutePermissions
         $method = strtoupper($request->method());
 
         if ($this->matchesAny($this->denied, $method, $uri)) {
+            throw new RouteNotAvailable();
+        }
+
+        // Con `allowed` declarada, el default se invierte: lo que no está listado no existe
+        // para una key. Es lo que hay que usar para una superficie pública — con el default
+        // abierto, cada ruta nueva queda alcanzable el día que alguien la agrega, y nadie se
+        // entera hasta que la usan. Acá una ruta nueva nace denegada.
+        if ($this->allowed !== [] && ! $this->matchesAny($this->allowed, $method, $uri)) {
             throw new RouteNotAvailable();
         }
 

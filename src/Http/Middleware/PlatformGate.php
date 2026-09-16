@@ -20,6 +20,7 @@ use Funnelchat\PlatformGate\Usage\ApiCallRecorder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\Request;
+use Laravel\Sanctum\TransientToken;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\Response;
 use Throwable;
@@ -95,6 +96,19 @@ final class PlatformGate
             // Sin token no hay nada que clasificar. `Unverified`, que es la verdad: el 401
             // —si corresponde— lo da el `auth:sanctum` del dominio, no nosotros.
             $this->context->set(Caller::unverified());
+
+            return;
+        }
+
+        // Un `TransientToken` no es una fila de `personal_access_tokens`: es lo que Sanctum
+        // adjunta cuando resuelve al usuario por el fallback de sesión (`sanctum.guard`).
+        // O sea: una persona con el navegador abierto, no una key de máquina. No tiene
+        // `kind` y nunca va a tenerlo — preguntarle por la columna y cortar con 503 rompe
+        // todo el front y todos los tests que usan `actingAs()`. Es `web`, y se sabe sin
+        // mirar el esquema.
+        if ($token instanceof TransientToken) {
+            [$accountId, $isOwner] = ($this->accountResolver)($user);
+            $this->context->set(Caller::web($accountId, $isOwner));
 
             return;
         }

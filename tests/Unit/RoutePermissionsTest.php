@@ -73,6 +73,48 @@ final class RoutePermissionsTest extends TestCase
         $routes->requiredFor($this->request('POST', 'api/v1/devices/{device}/clean'));
     }
 
+    public function test_allowed_invierte_el_default(): void
+    {
+        $routes = new RoutePermissions('accounts', allowed: [
+            'api/v1/devices*',
+            'api/v1/alerts*',
+        ]);
+
+        $this->assertSame('accounts:read', $routes->requiredFor($this->request('GET', 'api/v1/devices')));
+        $this->assertSame('accounts:write', $routes->requiredFor($this->request('POST', 'api/v1/alerts/destinations')));
+    }
+
+    public function test_lo_no_declarado_en_allowed_no_existe(): void
+    {
+        // El punto de esta lista: una ruta nueva nace denegada. Con el default abierto,
+        // cualquier ruta que alguien agregue queda alcanzable el día que se mergea.
+        $routes = new RoutePermissions('accounts', allowed: ['api/v1/devices*']);
+
+        $this->expectException(\Funnelchat\PlatformGate\Exceptions\RouteNotAvailable::class);
+        $routes->requiredFor($this->request('POST', 'api/v1/me/billing/checkout'));
+    }
+
+    public function test_sin_allowed_el_default_sigue_abierto(): void
+    {
+        // Compatibilidad hacia atrás: los dominios que ya configuraron sólo `send` y
+        // `denied` no cambian de comportamiento.
+        $routes = new RoutePermissions('accounts');
+
+        $this->assertSame('accounts:read', $routes->requiredFor($this->request('GET', 'api/v1/cualquier-cosa')));
+    }
+
+    public function test_denied_gana_sobre_allowed(): void
+    {
+        $routes = new RoutePermissions(
+            'accounts',
+            denied: ['POST api/v1/devices/{device}/execute'],
+            allowed: ['api/v1/devices*'],
+        );
+
+        $this->expectException(\Funnelchat\PlatformGate\Exceptions\RouteNotAvailable::class);
+        $routes->requiredFor($this->request('POST', 'api/v1/devices/{device}/execute'));
+    }
+
     public function test_el_metodo_forma_parte_del_patron(): void
     {
         // `GET contacts/{contact}/message` no es envío aunque el URI coincida.

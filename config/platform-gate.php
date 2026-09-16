@@ -46,6 +46,23 @@ return [
 
     /*
     |---------------------------------------------------------------------------
+    | Superficie pública — invierte el default
+    |---------------------------------------------------------------------------
+    | Si esta lista NO está vacía, sólo lo que machee acá es alcanzable por una
+    | key: todo lo demás se rechaza como si no existiera.
+    |
+    | Es la forma correcta de declarar una superficie pública. Con el default
+    | abierto, cada ruta nueva que alguien agregue queda alcanzable el día que se
+    | mergea, y nadie se entera hasta que la usan. Acá una ruta nueva nace
+    | denegada, y el día que se quiera abrir hay que decirlo.
+    |
+    | `denied` sigue evaluándose primero, para poder excluir algo que machearía
+    | un patrón amplio de esta lista.
+    */
+    'allowed' => [],
+
+    /*
+    |---------------------------------------------------------------------------
     | Operación irreversible sobre el recurso externo
     |---------------------------------------------------------------------------
     | Rutas que mutan el recurso del cliente de forma que no se puede deshacer:
