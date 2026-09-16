@@ -63,6 +63,22 @@ return [
 
     /*
     |---------------------------------------------------------------------------
+    | Guard con el que se resuelve al llamador
+    |---------------------------------------------------------------------------
+    | El portero pregunta quién llama con este guard EXPLÍCITAMENTE, en vez de
+    | usar el de por defecto de la app —que suele ser `web`, o sea sesión—.
+    |
+    | Por qué importa: si el middleware queda montado antes de `auth:sanctum`, el
+    | guard por defecto devuelve null, el portero clasifica todo como no
+    | verificado y **deja pasar cualquier key sin chequear nada**, con respuestas
+    | idénticas a las de antes de instalarlo. Falla abierto y sin señal.
+    |
+    | Con esto, la posición del middleware en la cadena deja de importar.
+    */
+    'auth_guard' => env('PLATFORM_GATE_AUTH_GUARD', 'sanctum'),
+
+    /*
+    |---------------------------------------------------------------------------
     | Tope diario de llamadas por key
     |---------------------------------------------------------------------------
     | ⚠️ Cuenta LLAMADAS, no mensajes: es control de costo y abuso, NO un freno de
