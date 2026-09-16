@@ -46,6 +46,23 @@ return [
 
     /*
     |---------------------------------------------------------------------------
+    | Operación irreversible sobre el recurso externo
+    |---------------------------------------------------------------------------
+    | Rutas que mutan el recurso del cliente de forma que no se puede deshacer:
+    | resetear la sesión de un número —hay que volver a escanear el código—,
+    | purgar una cola de mensajes que se pierden sin papelera, borrar un recurso.
+    |
+    | Es un EJE APARTE, no un peldaño más alto de la escalera: quien puede editar
+    | no tiene por qué poder destruir, y al revés tampoco. Sin esta lista, todas
+    | estas rutas caen en `write` por ser POST/PUT/DELETE, y el permiso queda
+    | decorativo.
+    |
+    | Se evalúa después de `send` y antes del fallback por método HTTP.
+    */
+    'operate' => [],
+
+    /*
+    |---------------------------------------------------------------------------
     | Tope diario de llamadas por key
     |---------------------------------------------------------------------------
     | ⚠️ Cuenta LLAMADAS, no mensajes: es control de costo y abuso, NO un freno de

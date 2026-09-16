@@ -24,6 +24,7 @@ use Illuminate\Support\Str;
  * Y arriba de eso, dos listas explícitas que el dominio declara:
  *
  *   send ..... rutas que producen egress a WhatsApp → {dominio}:send
+ *   operate .. rutas que mutan el recurso externo de forma irreversible → {dominio}:operate
  *   denied ... superficie amplificada → NINGÚN permiso la habilita
  *
  * La lista `denied` no es un permiso más estricto: es la superficie donde una llamada
@@ -48,11 +49,13 @@ final readonly class RoutePermissions
     /**
      * @param string   $domain  El dominio que monta el portero: `conversations`, `accounts`, …
      * @param string[] $send    Patrones `METHOD uri` o `uri` que requieren `{domain}:send`.
+     * @param string[] $operate Patrones que requieren `{domain}:operate`.
      * @param string[] $denied  Patrones que ningún permiso habilita.
      */
     public function __construct(
         private string $domain,
         private array $send = [],
+        private array $operate = [],
         private array $denied = [],
     ) {
     }
@@ -84,6 +87,14 @@ final readonly class RoutePermissions
 
         if ($this->matchesAny($this->send, $method, $uri)) {
             return "{$this->domain}:send";
+        }
+
+        // `operate` va DESPUÉS de `send` y antes del fallback por método: es un eje
+        // aparte, no un peldaño más alto. Una ruta que muta el recurso externo de forma
+        // irreversible —resetear una sesión, purgar una cola— no puede viajar en el
+        // mismo permiso que editar un nombre, aunque las dos sean POST.
+        if ($this->matchesAny($this->operate, $method, $uri)) {
+            return "{$this->domain}:operate";
         }
 
         return in_array($method, ['GET', 'HEAD', 'OPTIONS'], true)

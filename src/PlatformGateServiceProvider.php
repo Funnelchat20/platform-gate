@@ -44,6 +44,7 @@ final class PlatformGateServiceProvider extends ServiceProvider
             return new RoutePermissions(
                 $domain,
                 (array) $app['config']->get('platform-gate.send', []),
+                (array) $app['config']->get('platform-gate.operate', []),
                 (array) $app['config']->get('platform-gate.denied', []),
             );
         });

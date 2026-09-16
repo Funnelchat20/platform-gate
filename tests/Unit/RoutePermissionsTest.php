@@ -34,6 +34,45 @@ final class RoutePermissionsTest extends TestCase
         );
     }
 
+    public function test_una_ruta_de_operacion_irreversible_pide_operate(): void
+    {
+        $routes = new RoutePermissions('accounts', operate: [
+            'PUT api/v1/devices/{device}/reset',
+            'POST api/v1/devices/{device}/clean',
+            'DELETE api/v1/devices/{device}/message-queue/all',
+        ]);
+
+        $this->assertSame('accounts:operate', $routes->requiredFor($this->request('PUT', 'api/v1/devices/{device}/reset')));
+        $this->assertSame('accounts:operate', $routes->requiredFor($this->request('POST', 'api/v1/devices/{device}/clean')));
+        $this->assertSame('accounts:operate', $routes->requiredFor($this->request('DELETE', 'api/v1/devices/{device}/message-queue/all')));
+    }
+
+    public function test_operate_no_se_lleva_puestas_las_demas_mutaciones(): void
+    {
+        // El riesgo de esta lista es al revés que el de `denied`: si machea de más,
+        // rutas comunes de escritura empiezan a pedir un permiso que casi nadie tiene.
+        $routes = new RoutePermissions('accounts', operate: [
+            'POST api/v1/devices/{device}/clean',
+        ]);
+
+        $this->assertSame('accounts:write', $routes->requiredFor($this->request('PUT', 'api/v1/devices/{device}')));
+        $this->assertSame('accounts:read', $routes->requiredFor($this->request('GET', 'api/v1/devices/{device}')));
+    }
+
+    public function test_denied_gana_sobre_operate(): void
+    {
+        // Mismo orden que con `send`: lo que ningún permiso habilita no puede
+        // volverse alcanzable por figurar además en otra lista.
+        $routes = new RoutePermissions(
+            'accounts',
+            operate: ['POST api/v1/devices/{device}/clean'],
+            denied: ['POST api/v1/devices/{device}/clean'],
+        );
+
+        $this->expectException(\Funnelchat\PlatformGate\Exceptions\RouteNotAvailable::class);
+        $routes->requiredFor($this->request('POST', 'api/v1/devices/{device}/clean'));
+    }
+
     public function test_el_metodo_forma_parte_del_patron(): void
     {
         // `GET contacts/{contact}/message` no es envío aunque el URI coincida.
