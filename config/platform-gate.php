@@ -9,7 +9,7 @@ return [
     | Dominio
     |---------------------------------------------------------------------------
     | El nombre con el que este backend aparece en los permisos: `conversations`,
-    | `accounts`, `communities`, `whalink`. De acá salen `{dominio}:read`,
+    | `accounts`, `communities`, `wha-link`. De acá salen `{dominio}:read`,
     | `{dominio}:write` y —donde corresponda— `{dominio}:send`.
     */
     'domain' => env('PLATFORM_GATE_DOMAIN'),
@@ -23,7 +23,7 @@ return [
     |
     | Sólo tiene sentido en dominios que mandan: conversations y communities.
     | accounts encola a conversations y su audiencia es siempre el dueño de la
-    | cuenta; whalink no manda. En esos dos, esta lista va vacía.
+    | cuenta; wha-link no manda. En esos dos, esta lista va vacía.
     |
     | Patrones: "POST api/v1/message/send-message" o "api/v1/messages/*".
     | Se machean contra el URI DEFINIDO de la ruta, no contra el path del request.
@@ -43,6 +43,23 @@ return [
     | desde la tabla de rutas no se pueden enumerar los caminos de envío.
     */
     'denied' => [],
+
+    /*
+    |---------------------------------------------------------------------------
+    | Operación irreversible sobre el recurso externo
+    |---------------------------------------------------------------------------
+    | Rutas que mutan el recurso del cliente de forma que no se puede deshacer:
+    | resetear la sesión de un número —hay que volver a escanear el código—,
+    | purgar una cola de mensajes que se pierden sin papelera, borrar un recurso.
+    |
+    | Es un EJE APARTE, no un peldaño más alto de la escalera: quien puede editar
+    | no tiene por qué poder destruir, y al revés tampoco. Sin esta lista, todas
+    | estas rutas caen en `write` por ser POST/PUT/DELETE, y el permiso queda
+    | decorativo.
+    |
+    | Se evalúa después de `send` y antes del fallback por método HTTP.
+    */
+    'operate' => [],
 
     /*
     |---------------------------------------------------------------------------
