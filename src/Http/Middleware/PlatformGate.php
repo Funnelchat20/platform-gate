@@ -18,6 +18,7 @@ use Funnelchat\PlatformGate\Permissions\RoutePermissions;
 use Funnelchat\PlatformGate\Usage\ApiCall;
 use Funnelchat\PlatformGate\Usage\ApiCallRecorder;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\Request;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\Response;
@@ -87,7 +88,7 @@ final class PlatformGate
 
     private function classify(Request $request): void
     {
-        $user = $request->user();
+        $user = $this->resolveUser($request);
         $token = $user?->currentAccessToken();
 
         if ($token === null) {
@@ -185,6 +186,34 @@ final class PlatformGate
      * Un valor desconocido en la columna NO cae en `web` por default: eso sería inventar
      * un permiso. Cae en `Unverified`, y se loguea fuerte para que se vea.
      */
+    /**
+     * Resuelve al llamador pidiéndole el guard EXPLÍCITAMENTE.
+     *
+     * `$request->user()` sin argumento usa el guard por defecto de la app, que en
+     * estos dominios es `web` (sesión). Si el middleware queda montado antes de
+     * `auth:sanctum` —y en Laravel eso pasa fácil, porque `appendToGroup('api', …)`
+     * corre antes que los middleware declarados en cada grupo de rutas— esa llamada
+     * devuelve `null`, el portero clasifica todo como `unverified` y **deja pasar
+     * cualquier key sin chequear nada**. Falla abierto y en silencio: las respuestas
+     * son idénticas a las de antes de instalarlo.
+     *
+     * Preguntando por el guard de tokens, el orden deja de importar.
+     */
+    private function resolveUser(Request $request): ?Authenticatable
+    {
+        $guard = (string) config('platform-gate.auth_guard', 'sanctum');
+
+        try {
+            $user = auth()->guard($guard)->user();
+        } catch (\InvalidArgumentException) {
+            // El dominio no declara ese guard. Caemos al comportamiento anterior en vez
+            // de romper: si está mal montado, lo dirá el probe de `kind`.
+            return $request->user();
+        }
+
+        return $user ?? $request->user();
+    }
+
     private function readKind(object $token): ?CallerKind
     {
         try {
