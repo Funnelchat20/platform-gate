@@ -46,6 +46,7 @@ final class PlatformGateServiceProvider extends ServiceProvider
                 (array) $app['config']->get('platform-gate.send', []),
                 (array) $app['config']->get('platform-gate.operate', []),
                 (array) $app['config']->get('platform-gate.denied', []),
+                (array) $app['config']->get('platform-gate.allowed', []),
             );
         });
 
