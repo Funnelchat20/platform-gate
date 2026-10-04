@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Funnelchat\PlatformGate\Permissions;
 
+use Funnelchat\PlatformGate\Exceptions\GateUnavailable;
 use Funnelchat\PlatformGate\Exceptions\PermissionDenied;
 use Laravel\Sanctum\Contracts\HasAbilities;
+use Throwable;
+use Traversable;
 
 /**
  * ¿La key tiene el permiso que la ruta pide?
@@ -42,6 +45,7 @@ final class PermissionChecker
 
     /**
      * @throws PermissionDenied
+     * @throws GateUnavailable si no se puede leer la lista de permisos del token.
      */
     public function assert(HasAbilities $token, string $required): void
     {
@@ -50,29 +54,67 @@ final class PermissionChecker
         }
     }
 
+    /**
+     * @throws GateUnavailable si no se puede leer la lista de permisos del token.
+     */
     public function allows(HasAbilities $token, string $required): bool
     {
-        // Un token con `*` puede todo, y `*` es justamente lo que lleva un token WEB. Una
-        // key nunca debería tener ese comodín —accounts las acuña con permisos
-        // explícitos— pero si alguna se cuela, con `can('*')` pasaría por encima de los
-        // diez permisos y del tercer grado. Defensa en profundidad: acá el comodín no
-        // vale, y el permiso se chequea literal.
+        // El permiso se busca LITERAL en la lista de la key. Nunca se le pregunta a
+        // `$token->can()`: ésa es la interpretación de Sanctum, para la que `*` es un
+        // comodín —es lo que lleva un token WEB—. Una key nunca debería tener ese
+        // comodín —accounts las acuña con permisos explícitos— y si alguna lo trae, acá
+        // es un string más: no habilita ninguno de los diez permisos ni el tercer grado.
+        $abilities = $this->abilitiesOf($token);
+
         [$domain, $grade] = array_pad(explode(':', $required, 2), 2, '');
 
-        $abilities = method_exists($token, 'getAbilities') ? $token->getAbilities() : null;
-
         foreach (self::IMPLIES[$grade] ?? [$grade] as $satisfying) {
-            $needle = "{$domain}:{$satisfying}";
-
-            $granted = is_array($abilities)
-                ? in_array($needle, $abilities, true)
-                : $token->can($needle);
-
-            if ($granted) {
+            if (in_array("{$domain}:{$satisfying}", $abilities, true)) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /**
+     * La lista de permisos de la key, tal como se emitió y sin interpretar.
+     *
+     * Sale de `getAbilities()` si el modelo lo tiene y, si no, del atributo `abilities`,
+     * que es donde la guarda Sanctum: su `PersonalAccessToken` no expone ningún método
+     * para leerla. Si el atributo llega como el texto JSON de la columna —un modelo del
+     * dominio que redefine `$casts` pierde el cast— se decodifica.
+     *
+     * Si no hay lista legible —el dominio no selecciona la columna, el valor no es una
+     * lista, leer el atributo tira— no hay con qué evaluar, y se corta (P7). Ni "evalué
+     * y está denegado" (sería un 403 terminal que miente) ni dejar pasar.
+     *
+     * @return list<string>
+     *
+     * @throws GateUnavailable
+     */
+    public function abilitiesOf(object $token): array
+    {
+        try {
+            $raw = method_exists($token, 'getAbilities')
+                ? $token->getAbilities()
+                : ($token->abilities ?? null);
+
+            if (is_string($raw)) {
+                $raw = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+            }
+
+            if ($raw instanceof Traversable) {
+                $raw = iterator_to_array($raw, false);
+            }
+        } catch (Throwable $e) {
+            throw new GateUnavailable('unreadable_abilities', $e);
+        }
+
+        if (! is_array($raw)) {
+            throw new GateUnavailable('unreadable_abilities');
+        }
+
+        return array_values(array_filter($raw, 'is_string'));
     }
 }

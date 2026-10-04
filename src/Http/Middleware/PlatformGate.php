@@ -176,14 +176,13 @@ final class PlatformGate
         $this->permissions->assert($token, $required);
         $this->cap->consume($keyId);
 
+        // La misma lista con la que se acaba de evaluar, leída de la misma forma: el
+        // dominio ramifica sobre lo que el portero vio, no sobre otra lectura.
         $this->context->set(Caller::apiKey(
             $keyId,
             $accountId,
             $isOwner,
-            array_values(array_filter(
-                method_exists($token, 'getAbilities') ? (array) $token->getAbilities() : [],
-                'is_string'
-            )),
+            $this->permissions->abilitiesOf($token),
         ));
     }
 
