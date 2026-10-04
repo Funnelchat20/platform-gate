@@ -56,6 +56,11 @@ Requiere PHP ^8.2, Laravel ^11.9 o ^12.0, y Sanctum ^4.0.
 // config/platform-gate.php
 'domain' => 'midominio',
 
+// La superficie de las keys: lo único que una key puede alcanzar. Vacía = nada.
+'allowed' => [
+    'api/v1/recurso*',
+],
+
 // Rutas que exigen el permiso de envío.
 'send' => [
     'POST api/v1/recurso/{id}/enviar',
@@ -67,9 +72,16 @@ Requiere PHP ^8.2, Laravel ^11.9 o ^12.0, y Sanctum ^4.0.
 ],
 ```
 
-**El resto sale del método HTTP** y no hay que declararlo: `GET`/`HEAD`/`OPTIONS` piden
-`{dominio}:read`, todo lo demás `{dominio}:write`. Declarar scope ruta por ruta no escala
-a cientos de rutas.
+**`allowed` es obligatoria para que una key llegue a algo.** Lo que no machea ahí se
+rechaza como si no existiera (403 `route_not_available`), y una lista vacía no deja
+**ninguna** ruta alcanzable: un dominio que no declara su superficie no expone nada. Así
+una ruta nueva nace denegada. Abrir todo es `['*']`, y es algo que hay que escribir. Sólo
+afecta a llamadores `api_key`: el front no pasa por esta lista. `denied` se evalúa antes,
+para poder excluir algo que machearía un patrón amplio.
+
+**Dentro de `allowed`, el permiso sale del método HTTP** y no hay que declararlo:
+`GET`/`HEAD`/`OPTIONS` piden `{dominio}:read`, todo lo demás `{dominio}:write`. Declarar
+scope ruta por ruta no escala a cientos de rutas.
 
 **La escalera va en un solo sentido:** `send` implica `write`, y `write` implica `read`. Al
 revés no: `write` **no** habilita envío — ésa es toda la razón por la que existe el tercer
@@ -85,11 +97,27 @@ igual. Es una defensa, no comodidad — con matcheo literal, un patrón con el n
 equivocado no falla ruidosamente: cae en la regla por método HTTP y puede clasificar una
 ruta de envío como escritura. Hay un test de regresión.
 
-### Si tu aplicación restringe columnas en `findToken()`, incluí `kind`
+### Cómo se leen el `kind` y los permisos del token
+
+**`kind`:** sólo hay dos valores de token, `api_key` y `web`. Cualquier otro —uno que esta
+versión no conoce, vacío, o `unverified`, que es un estado del portero y no un valor de la
+columna— es un llamador que el portero no sabe clasificar: responde 503
+`gate_unavailable` y lo deja en el log. No es `web` por descarte, ni una key sin permisos.
+
+**Permisos de una key:** el permiso que pide la ruta se busca **literal** en la lista de
+`abilities` del token. `*` es un string más: no habilita nada a una key. La lista sale de
+`getAbilities()` si el modelo lo tiene y, si no, del atributo `abilities` —el
+`PersonalAccessToken` de Sanctum no expone ningún método para leerla—. Si no se puede
+leer (la columna no se selecciona, el valor no es una lista), responde 503
+`gate_unavailable`: no pudo evaluar, y no deja pasar. La misma lista es la que el dominio
+ve en `Caller::$permissions`.
+
+### Si tu aplicación restringe columnas en `findToken()`, incluí `kind` y `abilities`
 
 Una aplicación puede sobreescribir `findToken()` en su modelo `PersonalAccessToken` para
 traer sólo algunas columnas. Si `kind` no está en esa lista, el atributo llega `null` y el
-portero no puede clasificar al llamador.
+portero no puede clasificar al llamador. Si falta `abilities`, no puede evaluar los
+permisos de una key, y corta con 503.
 
 ```php
 protected static array $selectColumns = [
@@ -144,14 +172,35 @@ identificador de cuenta — ni en respuestas, ni en headers, ni en webhooks.
 | Situación | Status | `error` | Terminal o reintentable |
 |---|---|---|---|
 | Le falta el permiso | 403 | `permission_denied` | Terminal |
-| Ruta de la superficie amplificada | 403 | `route_not_available` | Terminal — no hay permiso que pedir |
+| Ruta fuera de `allowed`, o de la superficie amplificada | 403 | `route_not_available` | Terminal — no hay permiso que pedir |
 | Se pasó del tope diario | 429 + `Retry-After` | `daily_cap_exceeded` | Terminal por hoy |
 | **No se pudo evaluar** | 503 + `Retry-After` | `gate_unavailable` | **Reintentable** |
+
+"No se pudo evaluar" incluye: el store del contador no responde, `kind` no se puede leer o
+tiene un valor desconocido, y la lista de permisos de la key no se puede leer.
 
 La última es la que importa: si el store se cae, **corta, no deja pasar**. Dejar pasar
 cuando no se puede evaluar es el agujero clásico — el cliente automatizado se pasa del
 límite justo cuando el control no responde. Y "no pude evaluar" nunca se colapsa con
 "evalué y está denegado": son dos respuestas para el cliente y dos métricas para vos.
+
+---
+
+## Actualizar desde 0.5
+
+El portero falla cerrado en tres lugares más. Revisá cada uno **antes** de subir la versión:
+
+1. **Declará `allowed`.** Sin ella, ninguna key alcanza nada (403 `route_not_available`).
+   Si tu `config/platform-gate.php` publicado no tiene la clave, agregala. Abrir todo es
+   `['*']`, pero para una superficie pública conviene listar lo que se expone.
+2. **Las keys necesitan sus permisos literales.** Una key cuya lista trae `*` en vez de los
+   permisos explícitos recibe 403 `permission_denied` en todo. Si tu modelo restringe
+   columnas en `findToken()`, incluí `abilities` o vas a ver 503.
+3. **Sólo `api_key` y `web` son valores de `kind`.** Si en tu tabla de tokens hay filas con
+   otro valor, esas llamadas pasan a 503. Antes de subir, contá los valores distintos de
+   `kind` en cada ambiente.
+
+`allows()` y `assert()` de `PermissionChecker` ahora pueden tirar `GateUnavailable`.
 
 ---
 
