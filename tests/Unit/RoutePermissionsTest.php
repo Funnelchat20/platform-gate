@@ -13,9 +13,15 @@ use PHPUnit\Framework\TestCase;
 
 final class RoutePermissionsTest extends TestCase
 {
+    /**
+     * La superficie abierta, declarada a propósito. Los tests que verifican CÓMO se
+     * clasifica una ruta la usan para que `allowed` no sea lo que decide el resultado.
+     */
+    private const EVERYTHING = ['*'];
+
     public function test_get_pide_read_y_el_resto_write(): void
     {
-        $routes = new RoutePermissions('conversations');
+        $routes = new RoutePermissions('conversations', allowed: self::EVERYTHING);
 
         $this->assertSame('conversations:read', $routes->requiredFor($this->request('GET', 'api/v1/contacts')));
         $this->assertSame('conversations:write', $routes->requiredFor($this->request('POST', 'api/v1/contacts')));
@@ -24,7 +30,7 @@ final class RoutePermissionsTest extends TestCase
 
     public function test_una_ruta_de_envio_pide_send(): void
     {
-        $routes = new RoutePermissions('conversations', send: [
+        $routes = new RoutePermissions('conversations', allowed: self::EVERYTHING, send: [
             'POST api/v1/contacts/{contact}/message',
         ]);
 
@@ -36,7 +42,7 @@ final class RoutePermissionsTest extends TestCase
 
     public function test_una_ruta_de_operacion_irreversible_pide_operate(): void
     {
-        $routes = new RoutePermissions('accounts', operate: [
+        $routes = new RoutePermissions('accounts', allowed: self::EVERYTHING, operate: [
             'PUT api/v1/devices/{device}/reset',
             'POST api/v1/devices/{device}/clean',
             'DELETE api/v1/devices/{device}/message-queue/all',
@@ -51,7 +57,7 @@ final class RoutePermissionsTest extends TestCase
     {
         // El riesgo de esta lista es al revés que el de `denied`: si machea de más,
         // rutas comunes de escritura empiezan a pedir un permiso que casi nadie tiene.
-        $routes = new RoutePermissions('accounts', operate: [
+        $routes = new RoutePermissions('accounts', allowed: self::EVERYTHING, operate: [
             'POST api/v1/devices/{device}/clean',
         ]);
 
@@ -67,6 +73,7 @@ final class RoutePermissionsTest extends TestCase
             'accounts',
             operate: ['POST api/v1/devices/{device}/clean'],
             denied: ['POST api/v1/devices/{device}/clean'],
+            allowed: self::EVERYTHING,
         );
 
         $this->expectException(\Funnelchat\PlatformGate\Exceptions\RouteNotAvailable::class);
@@ -94,13 +101,30 @@ final class RoutePermissionsTest extends TestCase
         $routes->requiredFor($this->request('POST', 'api/v1/me/billing/checkout'));
     }
 
-    public function test_sin_allowed_el_default_sigue_abierto(): void
+    public function test_sin_allowed_nada_es_alcanzable_para_una_key(): void
     {
-        // Compatibilidad hacia atrás: los dominios que ya configuraron sólo `send` y
-        // `denied` no cambian de comportamiento.
-        $routes = new RoutePermissions('accounts');
+        // Una lista vacía no es "sin restricción": es "nada declarado". Una superficie que
+        // nadie declaró no existe para una key, sea cual sea el método.
+        $routes = new RoutePermissions('accounts', send: ['POST api/v1/messages'], operate: ['POST api/v1/devices/{device}/clean']);
+
+        foreach ([['GET', 'api/v1/cualquier-cosa'], ['POST', 'api/v1/contacts'], ['POST', 'api/v1/messages'], ['POST', 'api/v1/devices/{device}/clean']] as [$method, $uri]) {
+            try {
+                $routes->requiredFor($this->request($method, $uri));
+                $this->fail("{$method} {$uri} no debería ser alcanzable sin `allowed`.");
+            } catch (RouteNotAvailable) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
+    public function test_el_comodin_en_allowed_abre_toda_la_superficie_y_hay_que_escribirlo(): void
+    {
+        // La superficie abierta sigue existiendo, pero es una decisión escrita en la
+        // config del dominio, no lo que pasa cuando nadie escribió nada.
+        $routes = new RoutePermissions('accounts', allowed: ['*']);
 
         $this->assertSame('accounts:read', $routes->requiredFor($this->request('GET', 'api/v1/cualquier-cosa')));
+        $this->assertSame('accounts:write', $routes->requiredFor($this->request('DELETE', 'api/v1/cualquier-cosa/{id}')));
     }
 
     public function test_denied_gana_sobre_allowed(): void
@@ -118,7 +142,7 @@ final class RoutePermissionsTest extends TestCase
     public function test_el_metodo_forma_parte_del_patron(): void
     {
         // `GET contacts/{contact}/message` no es envío aunque el URI coincida.
-        $routes = new RoutePermissions('conversations', send: [
+        $routes = new RoutePermissions('conversations', allowed: self::EVERYTHING, send: [
             'POST api/v1/contacts/{contact}/message',
         ]);
 
@@ -134,7 +158,7 @@ final class RoutePermissionsTest extends TestCase
         // registrada como `{template_id}`, no `{template}`. Con matcheo literal, el patrón
         // no macheaba y la ruta caía en `write` — una key sin permiso de envío mandando
         // plantillas. El nombre del parámetro no puede decidir esto.
-        $routes = new RoutePermissions('conversations', send: [
+        $routes = new RoutePermissions('conversations', allowed: self::EVERYTHING, send: [
             'POST api/v1/devices/{device}/templates/{template}/send-template',
         ]);
 
@@ -148,7 +172,7 @@ final class RoutePermissionsTest extends TestCase
     {
         // `{}` no puede volverse un comodín ancho: `contacts/{contact}` no es
         // `contacts/{contact}/message`.
-        $routes = new RoutePermissions('conversations', denied: ['POST api/v1/contacts/{contact}']);
+        $routes = new RoutePermissions('conversations', allowed: self::EVERYTHING, denied: ['POST api/v1/contacts/{contact}']);
 
         $this->assertSame(
             'conversations:write',
@@ -158,7 +182,7 @@ final class RoutePermissionsTest extends TestCase
 
     public function test_la_superficie_amplificada_no_la_habilita_ningun_permiso(): void
     {
-        $routes = new RoutePermissions('conversations', denied: [
+        $routes = new RoutePermissions('conversations', allowed: self::EVERYTHING, denied: [
             'POST api/v1/contacts/add-tags',
         ]);
 
@@ -174,6 +198,7 @@ final class RoutePermissionsTest extends TestCase
             'conversations',
             send: ['POST api/v1/broadcasts/{broadcast}/execute'],
             denied: ['POST api/v1/broadcasts/{broadcast}/execute'],
+            allowed: self::EVERYTHING,
         );
 
         $this->expectException(RouteNotAvailable::class);
@@ -183,7 +208,7 @@ final class RoutePermissionsTest extends TestCase
 
     public function test_el_comodin_machea_por_prefijo(): void
     {
-        $routes = new RoutePermissions('conversations', denied: ['api/v1/broadcasts/*']);
+        $routes = new RoutePermissions('conversations', allowed: self::EVERYTHING, denied: ['api/v1/broadcasts/*']);
 
         $this->expectException(RouteNotAvailable::class);
 
@@ -195,7 +220,7 @@ final class RoutePermissionsTest extends TestCase
         // Sin ruta resuelta sólo queda el path con ids adentro, que no machea ningún
         // patrón: las listas `send` y `denied` dejarían de aplicar EN SILENCIO y la
         // superficie amplificada quedaría alcanzable con `write`.
-        $routes = new RoutePermissions('conversations', denied: ['POST api/v1/contacts/add-tags']);
+        $routes = new RoutePermissions('conversations', allowed: self::EVERYTHING, denied: ['POST api/v1/contacts/add-tags']);
 
         $request = Request::create('/api/v1/contacts/add-tags', 'POST');
 
@@ -206,7 +231,7 @@ final class RoutePermissionsTest extends TestCase
 
     public function test_el_patron_no_depende_de_como_se_tipeo_la_ruta(): void
     {
-        $routes = new RoutePermissions('conversations', denied: ['POST api/v1/Contacts/Add-Tags']);
+        $routes = new RoutePermissions('conversations', allowed: self::EVERYTHING, denied: ['POST api/v1/Contacts/Add-Tags']);
 
         $this->expectException(RouteNotAvailable::class);
 
