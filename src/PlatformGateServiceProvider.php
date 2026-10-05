@@ -50,8 +50,9 @@ final class PlatformGateServiceProvider extends ServiceProvider
             );
         });
 
+        // Secreto compartido entre dominios si está definido; si no, el APP_KEY de este dominio (0.5).
         $this->app->singleton(KeyIdentity::class, fn ($app) => new KeyIdentity(
-            (string) $app['config']->get('app.key')
+            (string) ($app['config']->get('platform-gate.key_id_secret') ?: $app['config']->get('app.key'))
         ));
 
         $this->app->singleton(KindColumnProbe::class, fn ($app) => new KindColumnProbe(

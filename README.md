@@ -202,6 +202,14 @@ El portero falla cerrado en tres lugares más. Revisá cada uno **antes** de sub
 
 `allows()` y `assert()` de `PermissionChecker` ahora pueden tirar `GateUnavailable`.
 
+Y una opción nueva, que no cambia nada si no la definís:
+
+4. **`PLATFORM_GATE_KEY_ID_SECRET`**, el mismo valor en todos los dominios. Con él, una key
+   tiene el mismo `key_id` en todos los registros de uso y la pantalla de consumo puede
+   juntarlos. Sin él, el `key_id` sigue saliendo del `APP_KEY` de cada dominio, como en 0.5.
+   Definirlo cambia todos los `key_id`: las filas viejas del registro y los overrides de
+   `daily_call_cap_overrides` quedan con el valor anterior.
+
 ---
 
 ## El tope diario NO es un freno de envío

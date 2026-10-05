@@ -134,6 +134,23 @@ return [
 
     /*
     |---------------------------------------------------------------------------
+    | Secreto del identificador de la key
+    |---------------------------------------------------------------------------
+    | El `key_id` del registro de uso (y de `daily_call_cap_overrides`) es un HMAC
+    | del id del token. Con el MISMO secreto en todos los dominios, una key tiene el
+    | mismo `key_id` en todos, y la pantalla de consumo puede juntar los registros
+    | de cada dominio por ese valor.
+    |
+    | Sin definir, se usa `APP_KEY`, como hasta 0.5: el `key_id` de una misma key es
+    | distinto en cada dominio y además rota si rota el `APP_KEY`.
+    |
+    | Cambiarlo cambia todos los `key_id`: las filas viejas del registro y los
+    | overrides del tope quedan con el valor anterior.
+    */
+    'key_id_secret' => env('PLATFORM_GATE_KEY_ID_SECRET'),
+
+    /*
+    |---------------------------------------------------------------------------
     | Qué hacer si hay token pero no se puede leer `kind`
     |---------------------------------------------------------------------------
     | Normalmente NO hace falta tocarlo: el portero le pregunta al esquema.
