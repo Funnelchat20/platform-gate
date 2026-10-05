@@ -46,15 +46,16 @@ return [
 
     /*
     |---------------------------------------------------------------------------
-    | Superficie pública — invierte el default
+    | Superficie pública — lo único que una key puede alcanzar
     |---------------------------------------------------------------------------
-    | Si esta lista NO está vacía, sólo lo que machee acá es alcanzable por una
-    | key: todo lo demás se rechaza como si no existiera.
+    | Sólo lo que machee acá es alcanzable por una key: todo lo demás se rechaza
+    | como si no existiera (403 `route_not_available`).
     |
-    | Es la forma correcta de declarar una superficie pública. Con el default
-    | abierto, cada ruta nueva que alguien agregue queda alcanzable el día que se
-    | mergea, y nadie se entera hasta que la usan. Acá una ruta nueva nace
-    | denegada, y el día que se quiera abrir hay que decirlo.
+    | **Vacía = ninguna ruta.** Un dominio que no declara su superficie no expone
+    | nada a las keys. Una ruta nueva nace denegada, y el día que se quiera abrir
+    | hay que decirlo acá. Abrir todo es `['*']`, y también hay que escribirlo.
+    |
+    | Sólo afecta a llamadores `api_key`: el front (`web`) no pasa por esta lista.
     |
     | `denied` sigue evaluándose primero, para poder excluir algo que machearía
     | un patrón amplio de esta lista.
@@ -130,6 +131,23 @@ return [
     */
     'usage_connection' => env('PLATFORM_GATE_USAGE_CONNECTION'),
     'usage_table' => env('PLATFORM_GATE_USAGE_TABLE', 'api_call_log'),
+
+    /*
+    |---------------------------------------------------------------------------
+    | Secreto del identificador de la key
+    |---------------------------------------------------------------------------
+    | El `key_id` del registro de uso (y de `daily_call_cap_overrides`) es un HMAC
+    | del id del token. Con el MISMO secreto en todos los dominios, una key tiene el
+    | mismo `key_id` en todos, y la pantalla de consumo puede juntar los registros
+    | de cada dominio por ese valor.
+    |
+    | Sin definir, se usa `APP_KEY`, como hasta 0.5: el `key_id` de una misma key es
+    | distinto en cada dominio y además rota si rota el `APP_KEY`.
+    |
+    | Cambiarlo cambia todos los `key_id`: las filas viejas del registro y los
+    | overrides del tope quedan con el valor anterior.
+    */
+    'key_id_secret' => env('PLATFORM_GATE_KEY_ID_SECRET'),
 
     /*
     |---------------------------------------------------------------------------

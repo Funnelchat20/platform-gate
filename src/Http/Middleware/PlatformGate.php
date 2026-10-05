@@ -153,9 +153,26 @@ final class PlatformGate
             return;
         }
 
+        // `web` tiene que ser explícito: lo que no es `api_key` NO es web por descarte.
+        // `match` sin rama default, como se les pide a los dominios: si el enum crece,
+        // esto tira en los tests en vez de elegir en silencio.
+        $isMachine = match ($kind) {
+            CallerKind::ApiKey => true,
+            CallerKind::Web => false,
+
+            // Un valor de la columna que no es `api_key` ni `web` —uno que esta versión no
+            // conoce, o `unverified`, que es un estado del portero y no un valor de token—
+            // es un llamador que no sabemos clasificar. Tratarlo como `web` lo dejaría sin
+            // ningún chequeo; tratarlo como una key sin permisos sería inventar una
+            // clasificación y contestar "evalué y está denegado" (403 terminal) sin haber
+            // evaluado. Es "no pude evaluar": 503 reintentable, igual que cuando `kind` no
+            // se puede leer, y con el error en el log para que se vea.
+            CallerKind::Unverified => throw new GateUnavailable('unknown_kind'),
+        };
+
         [$accountId, $isOwner] = ($this->accountResolver)($user);
 
-        if ($kind !== CallerKind::ApiKey) {
+        if (! $isMachine) {
             $this->context->set(Caller::web($accountId, $isOwner));
 
             return;
@@ -176,30 +193,16 @@ final class PlatformGate
         $this->permissions->assert($token, $required);
         $this->cap->consume($keyId);
 
+        // La misma lista con la que se acaba de evaluar, leída de la misma forma: el
+        // dominio ramifica sobre lo que el portero vio, no sobre otra lectura.
         $this->context->set(Caller::apiKey(
             $keyId,
             $accountId,
             $isOwner,
-            array_values(array_filter(
-                method_exists($token, 'getAbilities') ? (array) $token->getAbilities() : [],
-                'is_string'
-            )),
+            $this->permissions->abilitiesOf($token),
         ));
     }
 
-    /**
-     * Lee `kind` del token. Devuelve `null` cuando no hay nada legible.
-     *
-     * TODO el acceso al atributo va adentro del `try`, incluida la normalización: el
-     * modelo es del dominio y puede castear la columna a lo que quiera. accounts la
-     * castea a un PHP enum propio, y la versión anterior de este método hacía
-     * `(string) $raw` afuera del `try` — un `Error` fatal, o sea 500 en cada request
-     * autenticado de ese dominio. Lo encontró accounts leyendo esta librería antes de
-     * instalarla.
-     *
-     * Un valor desconocido en la columna NO cae en `web` por default: eso sería inventar
-     * un permiso. Cae en `Unverified`, y se loguea fuerte para que se vea.
-     */
     /**
      * Resuelve al llamador pidiéndole el guard EXPLÍCITAMENTE.
      *
@@ -228,6 +231,20 @@ final class PlatformGate
         return $user ?? $request->user();
     }
 
+    /**
+     * Lee `kind` del token. Devuelve `null` cuando no hay nada legible.
+     *
+     * TODO el acceso al atributo va adentro del `try`, incluida la normalización: el
+     * modelo es del dominio y puede castear la columna a lo que quiera. accounts la
+     * castea a un PHP enum propio, y la versión anterior de este método hacía
+     * `(string) $raw` afuera del `try` — un `Error` fatal, o sea 500 en cada request
+     * autenticado de ese dominio. Lo encontró accounts leyendo esta librería antes de
+     * instalarla.
+     *
+     * Un valor que no es `api_key` ni `web` NO cae en `web` por default: eso sería
+     * inventar un permiso. Vuelve como `Unverified`, se loguea fuerte, y `classify()`
+     * corta con 503.
+     */
     private function readKind(object $token): ?CallerKind
     {
         try {
@@ -247,8 +264,10 @@ final class PlatformGate
             return null;
         }
 
-        if ($kind === null) {
-            $this->logger->error('platform-gate: `kind` desconocido en personal_access_tokens', [
+        // `unverified` también es desconocido acá: es lo que dice el portero cuando no pudo
+        // clasificar, no un valor que un token pueda traer en la columna.
+        if ($kind === null || $kind === CallerKind::Unverified) {
+            $this->logger->error('platform-gate: `kind` desconocido en personal_access_tokens — se corta con 503', [
                 'token_model' => $token::class,
             ]);
 

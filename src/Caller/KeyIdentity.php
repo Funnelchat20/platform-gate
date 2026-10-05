@@ -12,12 +12,14 @@ namespace Funnelchat\PlatformGate\Caller;
  * un invitado cuál de sus workflows se desbocó— y tiene que ser **opaco**: no es, ni
  * deriva legiblemente de, `user_id` ni `account_id` (D5).
  *
- * HMAC con el `APP_KEY` resuelve las dos: determinístico para el mismo id de token, y sin
- * significado derivable para quien lo lea en un log sin la clave.
+ * Un HMAC resuelve las dos: determinístico para el mismo id de token, y sin significado
+ * derivable para quien lo lea en un log sin el secreto.
  *
- * Ojo con la estabilidad: si rota el `APP_KEY`, rotan todos los `key_id`. Es aceptable
- * —son correlación de logs, no una clave primaria— pero hay que saberlo antes de
- * llavear algo persistente con esto.
+ * El secreto es `platform-gate.key_id_secret` si está definido —el mismo en todos los
+ * dominios, para que la misma key tenga el mismo `key_id` en todos y el consumo se pueda
+ * juntar— y si no, el `APP_KEY` del dominio. Ojo con la estabilidad: si rota el secreto,
+ * rotan todos los `key_id`. Es aceptable —son correlación de logs, no una clave
+ * primaria— pero hay que saberlo antes de llavear algo persistente con esto.
  */
 final readonly class KeyIdentity
 {

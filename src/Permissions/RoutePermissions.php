@@ -21,12 +21,12 @@ use Illuminate\Support\Str;
  *   GET/HEAD/OPTIONS ......... {dominio}:read
  *   todo lo demás ............ {dominio}:write
  *
- * Y arriba de eso, dos listas explícitas que el dominio declara:
+ * Y alrededor de eso, listas explícitas que el dominio declara:
  *
+ *   allowed .. la superficie de las keys: lo no listado queda denegado. Vacía = nada.
  *   send ..... rutas que producen egress a WhatsApp → {dominio}:send
  *   operate .. rutas que mutan el recurso externo de forma irreversible → {dominio}:operate
  *   denied ... superficie amplificada → NINGÚN permiso la habilita
- *   allowed .. si se declara, invierte el default: lo no listado queda denegado
  *
  * La lista `denied` no es un permiso más estricto: es la superficie donde una llamada
  * produce N mensajes con N no acotado por el request. En conversations son diez rutas, y
@@ -52,9 +52,9 @@ final readonly class RoutePermissions
      * @param string[] $send    Patrones `METHOD uri` o `uri` que requieren `{domain}:send`.
      * @param string[] $operate Patrones que requieren `{domain}:operate`.
      * @param string[] $denied  Patrones que ningún permiso habilita.
-     * @param string[] $allowed Si NO está vacía, invierte el default: sólo estos patrones son
-     *                          alcanzables y todo lo demás cae en `denied`. Es la forma segura
-     *                          de declarar una superficie pública.
+     * @param string[] $allowed Los únicos patrones alcanzables por una key; todo lo demás se
+     *                          rechaza como `denied`. Vacía = ninguna ruta. `['*']` abre toda la
+     *                          superficie, y es una decisión que el dominio tiene que escribir.
      */
     public function __construct(
         private string $domain,
@@ -90,11 +90,13 @@ final readonly class RoutePermissions
             throw new RouteNotAvailable();
         }
 
-        // Con `allowed` declarada, el default se invierte: lo que no está listado no existe
-        // para una key. Es lo que hay que usar para una superficie pública — con el default
-        // abierto, cada ruta nueva queda alcanzable el día que alguien la agrega, y nadie se
-        // entera hasta que la usan. Acá una ruta nueva nace denegada.
-        if ($this->allowed !== [] && ! $this->matchesAny($this->allowed, $method, $uri)) {
+        // Lo que no está en `allowed` no existe para una key — y una lista vacía no es "sin
+        // restricción", es "nada declarado": no deja nada alcanzable. Con un default
+        // abierto, cada ruta nueva queda alcanzable el día que alguien la agrega, y nadie
+        // se entera hasta que la usan; un dominio que monta el portero y no declara su
+        // superficie expone todo sin haberlo decidido. Acá una ruta nueva nace denegada,
+        // y abrir todo (`['*']`) es algo que hay que escribir.
+        if (! $this->matchesAny($this->allowed, $method, $uri)) {
             throw new RouteNotAvailable();
         }
 
