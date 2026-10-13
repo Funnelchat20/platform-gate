@@ -23,6 +23,10 @@ use Traversable;
  * Y si mañana los permisos se parten más fino, acá es donde el permiso viejo se trata
  * como equivalente al conjunto nuevo, para no obligar a nadie a recrear su key (D10).
  * Al revés no se promete por escrito.
+ *
+ * La escalera vale dentro de cada prefijo, sea el dominio o uno que la ruta declara
+ * (`permission_prefix`, Q48): `webhooks:write` habilita `webhooks:read`, y nunca
+ * `accounts:read`; `accounts:write` no habilita nada de `webhooks`.
  */
 final class PermissionChecker
 {

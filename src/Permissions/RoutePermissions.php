@@ -28,6 +28,13 @@ use Illuminate\Support\Str;
  *   operate .. rutas que mutan el recurso externo de forma irreversible → {dominio}:operate
  *   denied ... superficie amplificada → NINGÚN permiso la habilita
  *
+ * Esas listas deciden el GRADO. El PREFIJO es el dominio, salvo que la ruta declare uno propio
+ * en `permission_prefix` (Q48): `'api/v1/webhooks*' => 'webhooks'` hace que esas rutas pidan
+ * `webhooks:read` / `webhooks:write` —o `webhooks:send`, `webhooks:operate` si además están
+ * en esas listas— en vez de `{dominio}:{grado}`. Se declara el prefijo y no el permiso
+ * entero a propósito: el grado sigue saliendo de donde sale siempre, así que declarar una
+ * ruta no puede bajarle el grado a una de envío ni olvidarse de un método.
+ *
  * La lista `denied` no es un permiso más estricto: es la superficie donde una llamada
  * produce N mensajes con N no acotado por el request. En conversations son diez rutas, y
  * tres de ellas ni siquiera parecen de envío — agregarle una etiqueta a un contacto
@@ -47,6 +54,11 @@ use Illuminate\Support\Str;
  */
 final readonly class RoutePermissions
 {
+    /** Como el nombre de un dominio: minúsculas, dígitos y guiones (`wha-link`). Sin `:`. */
+    private const PREFIX = '/^[a-z0-9]+(-[a-z0-9]+)*$/';
+
+    private bool $permissionPrefixIsReadable;
+
     /**
      * @param string   $domain  El dominio que monta el portero: `conversations`, `accounts`, …
      * @param string[] $send    Patrones `METHOD uri` o `uri` que requieren `{domain}:send`.
@@ -55,6 +67,9 @@ final readonly class RoutePermissions
      * @param string[] $allowed Los únicos patrones alcanzables por una key; todo lo demás se
      *                          rechaza como `denied`. Vacía = ninguna ruta. `['*']` abre toda la
      *                          superficie, y es una decisión que el dominio tiene que escribir.
+     * @param array<string,string> $permissionPrefix Patrón => prefijo propio de permiso, en lugar
+     *                          del dominio. No abre superficie: la ruta igual tiene que estar
+     *                          en `allowed`.
      */
     public function __construct(
         private string $domain,
@@ -62,12 +77,15 @@ final readonly class RoutePermissions
         private array $operate = [],
         private array $denied = [],
         private array $allowed = [],
+        private array $permissionPrefix = [],
     ) {
+        $this->permissionPrefixIsReadable = self::isReadablePrefixMap($permissionPrefix);
     }
 
     /**
      * @throws RouteNotAvailable si la ruta cae en la superficie amplificada.
-     * @throws GateUnavailable   si no hay ruta resuelta y por lo tanto no se puede clasificar.
+     * @throws GateUnavailable   si no hay ruta resuelta y por lo tanto no se puede clasificar, o
+     *                           si `permission_prefix` no se puede leer o le da dos prefijos.
      */
     public function requiredFor(Request $request): string
     {
@@ -100,8 +118,10 @@ final readonly class RoutePermissions
             throw new RouteNotAvailable();
         }
 
+        $prefix = $this->prefixFor($method, $uri);
+
         if ($this->matchesAny($this->send, $method, $uri)) {
-            return "{$this->domain}:send";
+            return "{$prefix}:send";
         }
 
         // `operate` va DESPUÉS de `send` y antes del fallback por método: es un eje
@@ -109,12 +129,61 @@ final readonly class RoutePermissions
         // irreversible —resetear una sesión, purgar una cola— no puede viajar en el
         // mismo permiso que editar un nombre, aunque las dos sean POST.
         if ($this->matchesAny($this->operate, $method, $uri)) {
-            return "{$this->domain}:operate";
+            return "{$prefix}:operate";
         }
 
         return in_array($method, ['GET', 'HEAD', 'OPTIONS'], true)
-            ? "{$this->domain}:read"
-            : "{$this->domain}:write";
+            ? "{$prefix}:read"
+            : "{$prefix}:write";
+    }
+
+    /**
+     * El prefijo del permiso: el que la ruta declara en `permission_prefix`, o el dominio.
+     *
+     * Cierra en los dos casos donde no se puede saber cuál es. Un mapa ilegible —una lista en
+     * vez de un mapa, un valor con `:` porque alguien escribió el permiso entero, un prefijo
+     * vacío— no dice qué rutas quería cubrir, así que ninguna ruta se puede clasificar con
+     * certeza: caer al dominio sería pedir `{dominio}:{grado}` justo en las rutas que alguien
+     * quiso sacar de ahí. Y dos patrones que le dan a la misma ruta prefijos distintos no se
+     * resuelven por orden de declaración: eso haría que reordenar la config cambie permisos.
+     *
+     * @throws GateUnavailable
+     */
+    private function prefixFor(string $method, string $uri): string
+    {
+        if (! $this->permissionPrefixIsReadable) {
+            throw new GateUnavailable('unreadable_permission_prefix');
+        }
+
+        $prefixes = [];
+
+        foreach ($this->permissionPrefix as $pattern => $prefix) {
+            if ($this->matches($pattern, $method, $uri)) {
+                $prefixes[$prefix] = true;
+            }
+        }
+
+        if (count($prefixes) > 1) {
+            throw new GateUnavailable('ambiguous_permission_prefix');
+        }
+
+        return (string) (array_key_first($prefixes) ?? $this->domain);
+    }
+
+    /** @param array<mixed> $map */
+    private static function isReadablePrefixMap(array $map): bool
+    {
+        foreach ($map as $pattern => $prefix) {
+            if (! is_string($pattern) || trim($pattern) === '') {
+                return false;
+            }
+
+            if (! is_string($prefix) || preg_match(self::PREFIX, $prefix) !== 1) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /** @param string[] $patterns */

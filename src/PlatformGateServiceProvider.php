@@ -7,6 +7,7 @@ namespace Funnelchat\PlatformGate;
 use Funnelchat\PlatformGate\Caller\CallerContext;
 use Funnelchat\PlatformGate\Caller\KeyIdentity;
 use Funnelchat\PlatformGate\Caller\KindColumnProbe;
+use Funnelchat\PlatformGate\Edge\EdgeTrust;
 use Funnelchat\PlatformGate\Http\Middleware\PlatformGate;
 use Funnelchat\PlatformGate\Limits\DailyCallCap;
 use Funnelchat\PlatformGate\Permissions\PermissionChecker;
@@ -47,8 +48,19 @@ final class PlatformGateServiceProvider extends ServiceProvider
                 (array) $app['config']->get('platform-gate.operate', []),
                 (array) $app['config']->get('platform-gate.denied', []),
                 (array) $app['config']->get('platform-gate.allowed', []),
+                (array) $app['config']->get('platform-gate.permission_prefix', []),
             );
         });
+
+        // Sin estado de request —el veredicto queda en los atributos de cada pedido—, así que
+        // puede ser singleton. Y lo es a propósito: lo que no acepta de la config lo dice una
+        // vez por proceso, no en cada pedido.
+        $this->app->singleton(EdgeTrust::class, fn ($app) => EdgeTrust::fromConfig(
+            $app['config']->get('platform-gate.edge_secret'),
+            $app['config']->get('platform-gate.edge_secret_next'),
+            $app['config']->get('platform-gate.public_hosts'),
+            $app->make(LoggerInterface::class),
+        ));
 
         // Secreto compartido entre dominios si está definido; si no, el APP_KEY de este dominio (0.5).
         $this->app->singleton(KeyIdentity::class, fn ($app) => new KeyIdentity(
@@ -86,7 +98,10 @@ final class PlatformGateServiceProvider extends ServiceProvider
             $app->make(KindColumnProbe::class),
             $app->make(LoggerInterface::class),
             $this->accountResolver(),
+            $app->make(EdgeTrust::class),
             (bool) $app['config']->get('platform-gate.block_on_unreadable_kind', false),
+            (bool) $app['config']->get('platform-gate.require_edge', false),
+            (string) ($app['config']->get('platform-gate.public_url') ?: 'https://api.funnelchat.com'),
         ));
     }
 
