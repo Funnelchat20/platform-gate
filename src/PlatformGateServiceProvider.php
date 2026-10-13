@@ -54,7 +54,7 @@ final class PlatformGateServiceProvider extends ServiceProvider
 
         // Sin estado de request —el veredicto queda en los atributos de cada pedido—, así que
         // puede ser singleton. Y lo es a propósito: lo que no acepta de la config lo dice una
-        // vez por proceso, no en cada pedido.
+        // vez por proceso —en el primer pedido, ya sin el secreto—, no en cada pedido.
         $this->app->singleton(EdgeTrust::class, fn ($app) => EdgeTrust::fromConfig(
             $app['config']->get('platform-gate.edge_secret'),
             $app['config']->get('platform-gate.edge_secret_next'),
