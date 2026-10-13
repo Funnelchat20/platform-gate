@@ -250,10 +250,25 @@ Sin secreto válido no le cree ninguna de las dos. Para que eso alcance, el domi
 tiene que creerle `X-Forwarded-Host` en su `trustProxies`: si se lo cree, Laravel le cree al
 cliente antes de que el portero pueda decir nada. Es lo que se vio en staging el 09-10.
 
-**El secreto no sigue en el pedido.** Se saca apenas se lee, valga o no: lo que corre
-después —logs, reportes de errores— no lo ve. Lo que corre **antes** de `TrustEdge` sí lo
-pudo ver: si el dominio manda cabeceras a un servicio de errores desde un middleware global
-que corre primero, agregá `X-Funnelchat-Edge` a las que se limpian.
+**El secreto no sigue en el pedido.** Se saca apenas se lee, valga o no: de las cabeceras y
+del `server` del pedido, y de `$_SERVER` y `$_ENV` (`HTTP_X_FUNNELCHAT_EDGE`). La librería no
+loguea nada antes de sacarlo, ni siquiera sus errores de configuración. Lo que corre
+después —logs, reportes de errores— no lo ve.
+
+**Lo que esta librería no puede sacar.** Dos cosas: lo que se loguea **antes** de
+`TrustEdge` —el dominio u otro paquete, desde un middleware global que corre primero—, y lo
+que PHP guarda del pedido fuera de esos arrays. En PHP-FPM, `getallheaders()` devuelve las
+cabeceras que mandó el servidor web, no las de `$_SERVER`: ahí la cabecera sigue durante
+todo el pedido, y un reporte de errores que arma el pedido con esa función la encuentra
+igual.
+
+**Si usás Sentry**, el `before_send` es lo que cierra las dos. Ante un log o una excepción
+anterior a su middleware, Sentry arma el pedido desde los globales de PHP. Si tu
+`before_send` ya limpia cabeceras, sumá `X-Funnelchat-Edge`. Si no tenés uno, agregalo: que
+saque `X-Funnelchat-Edge` de las cabeceras del pedido del evento, sin distinguir mayúsculas,
+y devuelva el evento. Si mandás transacciones (performance), lo mismo en
+`before_send_transaction`. Con otro servicio de errores, lo mismo en lo que use para limpiar
+cabeceras.
 
 **Un secreto de menos de 32 caracteres no cuenta.** Queda en el log como error y no se usa.
 Generalo con `openssl rand -hex 32`.
@@ -294,6 +309,40 @@ La última es la que importa: si el store se cae, **corta, no deja pasar**. Deja
 cuando no se puede evaluar es el agujero clásico — el cliente automatizado se pasa del
 límite justo cuando el control no responde. Y "no pude evaluar" nunca se colapsa con
 "evalué y está denegado": son dos respuestas para el cliente y dos métricas para vos.
+
+---
+
+## Actualizar desde 0.7.0
+
+Versión **0.7.1**. Compatible: no hay que cambiar config ni código, sólo subir la versión.
+
+**Por qué.** La auditoría de communities del 13-10 (hallazgo Medium S1, iniciativa
+api-abierta) encontró que el secreto del borde podía terminar en Sentry. 0.7.0 lo sacaba de
+las cabeceras y del `server` del pedido, pero no de `$_SERVER`. Y los logs de la librería
+dentro de `TrustEdge` —un secreto o un host mal cargado, una rotación desordenada, el Worker
+encendido antes que el secreto— salen antes de que Sentry tome el pedido de Laravel: en ese
+momento lo arma desde los globales, donde seguía `HTTP_X_FUNNELCHAT_EDGE`. Con el canal
+`sentry` en `LOG_STACK`, el secreto real del Worker se iba con el log. Los errores de
+configuración, además, se logueaban al armar `TrustEdge`, antes de sacar el secreto de
+ningún lado.
+
+**Qué cambia:**
+
+- El secreto se saca también de `$_SERVER` y `$_ENV` (`HTTP_X_FUNNELCHAT_EDGE`), haya
+  llegado bien o mal.
+- Los errores de configuración del borde (un secreto corto, un host que no es host) se
+  loguean en el primer pedido, después de sacar el secreto, y no al armar `TrustEdge`.
+  Siguen saliendo una vez por proceso y con el mismo texto.
+- Ningún log de la librería incluye el valor. Ya era así; ahora hay tests que lo prueban con
+  los logs emitidos dentro de `TrustEdge`.
+
+**Cómo subir.** Si fijaste `0.7.0`, cambiá a `0.7.1`; con `^0.7` alcanza con
+`composer update funnelchat20/platform-gate`. Los dominios suben en cualquier orden. Si venís
+de 0.6, seguí «Actualizar desde 0.6» con 0.7.1 en lugar de 0.7.0.
+
+**Si usás Sentry, esta versión sola no alcanza.** En PHP-FPM la cabecera sigue a la vista de
+`getallheaders()` y desde PHP no se puede borrar: el `before_send` del dominio tiene que
+sacar `X-Funnelchat-Edge`. Ver «El borde».
 
 ---
 
@@ -408,7 +457,7 @@ Desde ese momento, una key con `accounts:*` y sin `webhooks:*` deja de alcanzar 
 
 ### Orden
 
-1. platform-gate 0.7.0.
+1. platform-gate 0.7.1 (no 0.7.0: ver «Actualizar desde 0.7.0»).
 2. accounts, conversations y communities, cada uno con la exigencia **apagada**: variables
    cargadas (paso 1), y en el mismo deploy la versión 0.7, `trustProxies`, `TrustEdge` y el
    401 (paso 2).
