@@ -27,8 +27,14 @@ use Symfony\Component\HttpFoundation\Response;
  */
 abstract class GateTestCase extends TestCase
 {
-    /** @var list<array{level: string, message: string}> */
+    /** El host interno al que llega un pedido directo, sin pasar por el borde. */
+    protected const INTERNAL_HOST = 'communities-api.funnelchat.app';
+
+    /** @var list<array{level: string, message: string, context: array<string, mixed>}> */
     protected array $logged = [];
+
+    /** El último pedido que pasó por `send()`, tal como lo dejó el portero. */
+    protected ?Request $lastRequest = null;
 
     protected function getPackageProviders($app): array
     {
@@ -50,14 +56,14 @@ abstract class GateTestCase extends TestCase
 
         $this->app->instance(LoggerInterface::class, new class($logged) extends AbstractLogger
         {
-            /** @param list<array{level: string, message: string}> $records */
+            /** @param list<array{level: string, message: string, context: array<string, mixed>}> $records */
             public function __construct(private array &$records)
             {
             }
 
             public function log($level, string|\Stringable $message, array $context = []): void
             {
-                $this->records[] = ['level' => (string) $level, 'message' => (string) $message];
+                $this->records[] = ['level' => (string) $level, 'message' => (string) $message, 'context' => $context];
             }
         });
     }
@@ -68,7 +74,21 @@ abstract class GateTestCase extends TestCase
         return (new PersonalAccessToken())->forceFill(['id' => 42] + $attributes);
     }
 
-    protected function send(string $method, string $uri, ?object $token): Response
+    /**
+     * @param array<string, string|list<string>> $headers una lista manda la cabecera repetida
+     */
+    protected function send(string $method, string $uri, ?object $token, array $headers = [], string $host = 'localhost'): Response
+    {
+        $request = $this->request($method, $uri, $token, $headers, $host);
+
+        return $this->app->make(PlatformGate::class)
+            ->handle($request, static fn () => new Response('ok'));
+    }
+
+    /**
+     * @param array<string, string|list<string>> $headers
+     */
+    protected function request(string $method, string $uri, ?object $token, array $headers = [], string $host = 'localhost'): Request
     {
         $user = (new class extends User
         {
@@ -79,13 +99,18 @@ abstract class GateTestCase extends TestCase
             $user->withAccessToken($token);
         }
 
-        $request = Request::create('/'.str_replace(['{', '}'], '', $uri), $method);
+        $request = Request::create("http://{$host}/".str_replace(['{', '}'], '', $uri), $method);
+
+        foreach ($headers as $name => $value) {
+            $request->headers->set($name, $value);
+            $request->server->set('HTTP_'.strtoupper(str_replace('-', '_', $name)), is_array($value) ? implode(', ', $value) : $value);
+        }
+
         $route = new Route([$method], $uri, static fn () => null);
         $request->setRouteResolver(static fn () => $route);
         $request->setUserResolver(static fn () => $user);
 
-        return $this->app->make(PlatformGate::class)
-            ->handle($request, static fn () => new Response('ok'));
+        return $this->lastRequest = $request;
     }
 
     protected function caller(): Caller
@@ -110,5 +135,24 @@ abstract class GateTestCase extends TestCase
         }
 
         $this->fail("No se logueó ningún error que contenga `{$fragment}`.");
+    }
+
+    protected function assertLogged(string $level, string $fragment): void
+    {
+        foreach ($this->logged as $record) {
+            if ($record['level'] === $level && str_contains($record['message'], $fragment)) {
+                $this->addToAssertionCount(1);
+
+                return;
+            }
+        }
+
+        $this->fail("No se logueó ningún `{$level}` que contenga `{$fragment}`.");
+    }
+
+    /** Ni en el mensaje ni en el contexto de ningún registro. */
+    protected function assertNeverLogged(string $value): void
+    {
+        $this->assertStringNotContainsString($value, (string) json_encode($this->logged));
     }
 }

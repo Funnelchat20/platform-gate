@@ -9,6 +9,7 @@ use Funnelchat\PlatformGate\Exceptions\RouteNotAvailable;
 use Funnelchat\PlatformGate\Permissions\RoutePermissions;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class RoutePermissionsTest extends TestCase
@@ -236,6 +237,174 @@ final class RoutePermissionsTest extends TestCase
         $this->expectException(RouteNotAvailable::class);
 
         $routes->requiredFor($this->request('POST', 'api/v1/contacts/add-tags'));
+    }
+
+    public function test_una_ruta_con_prefijo_propio_pide_ese_prefijo_con_el_grado_de_siempre(): void
+    {
+        $routes = new RoutePermissions('accounts', allowed: self::EVERYTHING, permissionPrefix: [
+            'api/v1/webhooks*' => 'webhooks',
+        ]);
+
+        $this->assertSame('webhooks:read', $routes->requiredFor($this->request('GET', 'api/v1/webhooks')));
+        $this->assertSame('webhooks:read', $routes->requiredFor($this->request('HEAD', 'api/v1/webhooks/{webhook}')));
+        $this->assertSame('webhooks:write', $routes->requiredFor($this->request('POST', 'api/v1/webhooks')));
+        $this->assertSame('webhooks:write', $routes->requiredFor($this->request('PATCH', 'api/v1/webhooks/{webhook}')));
+        $this->assertSame('webhooks:write', $routes->requiredFor($this->request('DELETE', 'api/v1/webhooks/{webhook}')));
+    }
+
+    public function test_una_ruta_sin_prefijo_propio_pide_lo_mismo_que_en_0_6(): void
+    {
+        $routes = new RoutePermissions(
+            'accounts',
+            send: ['POST api/v1/messages'],
+            operate: ['POST api/v1/devices/{device}/clean'],
+            allowed: self::EVERYTHING,
+            permissionPrefix: ['api/v1/webhooks*' => 'webhooks'],
+        );
+
+        $this->assertSame('accounts:read', $routes->requiredFor($this->request('GET', 'api/v1/devices')));
+        $this->assertSame('accounts:write', $routes->requiredFor($this->request('POST', 'api/v1/devices')));
+        $this->assertSame('accounts:send', $routes->requiredFor($this->request('POST', 'api/v1/messages')));
+        $this->assertSame('accounts:operate', $routes->requiredFor($this->request('POST', 'api/v1/devices/{device}/clean')));
+    }
+
+    public function test_el_prefijo_propio_no_le_baja_el_grado_a_una_ruta_de_envio_ni_de_operacion(): void
+    {
+        // Por qué se declara el prefijo y no el permiso entero: las listas que suben el grado
+        // siguen mandando.
+        $routes = new RoutePermissions(
+            'accounts',
+            send: ['POST api/v1/webhooks/{webhook}/test'],
+            operate: ['DELETE api/v1/webhooks/{webhook}/deliveries'],
+            allowed: self::EVERYTHING,
+            permissionPrefix: ['api/v1/webhooks*' => 'webhooks'],
+        );
+
+        $this->assertSame('webhooks:send', $routes->requiredFor($this->request('POST', 'api/v1/webhooks/{webhook}/test')));
+        $this->assertSame('webhooks:operate', $routes->requiredFor($this->request('DELETE', 'api/v1/webhooks/{webhook}/deliveries')));
+    }
+
+    public function test_el_prefijo_propio_respeta_el_metodo_del_patron(): void
+    {
+        $routes = new RoutePermissions('accounts', allowed: self::EVERYTHING, permissionPrefix: [
+            'GET api/v1/stats*' => 'insights',
+        ]);
+
+        $this->assertSame('insights:read', $routes->requiredFor($this->request('GET', 'api/v1/stats/{device}')));
+        $this->assertSame('accounts:write', $routes->requiredFor($this->request('POST', 'api/v1/stats/{device}')));
+    }
+
+    public function test_el_nombre_del_placeholder_tampoco_decide_el_prefijo(): void
+    {
+        $routes = new RoutePermissions('accounts', allowed: self::EVERYTHING, permissionPrefix: [
+            'api/v1/webhooks/{webhook}/deliveries' => 'webhooks',
+        ]);
+
+        $this->assertSame('webhooks:read', $routes->requiredFor($this->request('GET', 'api/v1/webhooks/{webhook_id}/deliveries')));
+    }
+
+    public function test_el_prefijo_propio_no_abre_superficie(): void
+    {
+        $routes = new RoutePermissions('accounts', allowed: ['api/v1/devices*'], permissionPrefix: [
+            'api/v1/webhooks*' => 'webhooks',
+        ]);
+
+        $this->expectException(RouteNotAvailable::class);
+        $routes->requiredFor($this->request('GET', 'api/v1/webhooks'));
+    }
+
+    public function test_denied_gana_sobre_el_prefijo_propio(): void
+    {
+        $routes = new RoutePermissions(
+            'accounts',
+            denied: ['POST api/v1/webhooks/{webhook}/replay-all'],
+            allowed: self::EVERYTHING,
+            permissionPrefix: ['api/v1/webhooks*' => 'webhooks'],
+        );
+
+        $this->expectException(RouteNotAvailable::class);
+        $routes->requiredFor($this->request('POST', 'api/v1/webhooks/{webhook}/replay-all'));
+    }
+
+    public function test_dos_patrones_con_el_mismo_prefijo_no_son_ambiguos(): void
+    {
+        $routes = new RoutePermissions('accounts', allowed: self::EVERYTHING, permissionPrefix: [
+            'api/v1/webhooks*' => 'webhooks',
+            'GET api/v1/webhooks/{webhook}' => 'webhooks',
+        ]);
+
+        $this->assertSame('webhooks:read', $routes->requiredFor($this->request('GET', 'api/v1/webhooks/{webhook}')));
+    }
+
+    public function test_dos_prefijos_para_la_misma_ruta_cortan_en_vez_de_elegir_por_orden(): void
+    {
+        $routes = new RoutePermissions('accounts', allowed: self::EVERYTHING, permissionPrefix: [
+            'api/v1/webhooks*' => 'webhooks',
+            'api/v1/*/deliveries' => 'deliveries',
+        ]);
+
+        // La que machea uno solo sigue andando…
+        $this->assertSame('webhooks:read', $routes->requiredFor($this->request('GET', 'api/v1/webhooks')));
+
+        // …y la que machea los dos no se resuelve por orden de declaración.
+        $this->assertUnavailable('ambiguous_permission_prefix', $routes, 'GET', 'api/v1/webhooks/{webhook}/deliveries');
+    }
+
+    /** @return iterable<string, array{array<mixed>}> */
+    public static function unreadablePrefixMaps(): iterable
+    {
+        yield 'el permiso entero en vez del prefijo' => [['GET api/v1/webhooks' => 'webhooks:read']];
+        yield 'una lista en vez de un mapa' => [['api/v1/webhooks*']];
+        yield 'prefijo vacío' => [['api/v1/webhooks*' => '']];
+        yield 'prefijo con mayúsculas' => [['api/v1/webhooks*' => 'Webhooks']];
+        yield 'prefijo con espacios' => [['api/v1/webhooks*' => 'web hooks']];
+        yield 'prefijo que no es texto' => [['api/v1/webhooks*' => ['webhooks']]];
+        yield 'patrón vacío' => [[' ' => 'webhooks']];
+    }
+
+    /** @param array<mixed> $map */
+    #[DataProvider('unreadablePrefixMaps')]
+    public function test_un_mapa_de_prefijos_ilegible_corta_en_vez_de_caer_al_dominio(array $map): void
+    {
+        // Aunque la ruta no sea la del valor roto: un mapa ilegible no dice qué rutas quería
+        // cubrir, así que ninguna se puede clasificar con certeza.
+        $routes = new RoutePermissions('accounts', allowed: self::EVERYTHING, permissionPrefix: $map);
+
+        $this->assertUnavailable('unreadable_permission_prefix', $routes, 'GET', 'api/v1/webhooks');
+        $this->assertUnavailable('unreadable_permission_prefix', $routes, 'GET', 'api/v1/devices');
+    }
+
+    public function test_con_el_mapa_ilegible_lo_denegado_sigue_denegado(): void
+    {
+        // Cerrar por config rota no puede convertir un 403 terminal en un 503 reintentable.
+        $routes = new RoutePermissions(
+            'accounts',
+            denied: ['POST api/v1/webhooks/{webhook}/replay-all'],
+            allowed: ['api/v1/webhooks*'],
+            permissionPrefix: ['api/v1/webhooks*' => 'webhooks:write'],
+        );
+
+        foreach ([['POST', 'api/v1/webhooks/{webhook}/replay-all'], ['GET', 'api/v1/devices']] as [$method, $uri]) {
+            try {
+                $routes->requiredFor($this->request($method, $uri));
+                $this->fail("{$method} {$uri} debería seguir siendo inalcanzable.");
+            } catch (RouteNotAvailable) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
+    private function assertUnavailable(string $stage, RoutePermissions $routes, string $method, string $uri): void
+    {
+        try {
+            $routes->requiredFor($this->request($method, $uri));
+        } catch (GateUnavailable $e) {
+            $this->assertSame($stage, $e->stage);
+
+            return;
+        }
+
+        $this->fail("{$method} {$uri}: se esperaba GateUnavailable({$stage}).");
     }
 
     private function request(string $method, string $uri): Request

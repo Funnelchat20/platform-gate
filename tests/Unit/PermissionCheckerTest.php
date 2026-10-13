@@ -63,6 +63,21 @@ final class PermissionCheckerTest extends TestCase
         $this->assertTrue($checker->allows($this->tokenWith(['communities:operate']), 'communities:operate'));
     }
 
+    public function test_la_escalera_vale_dentro_de_un_prefijo_que_no_es_el_dominio(): void
+    {
+        // Q48: una ruta puede pedir `webhooks:{grado}`. La escalera es la misma, sin cruzar
+        // de prefijo en ninguna dirección.
+        $checker = new PermissionChecker();
+
+        $this->assertTrue($checker->allows($this->tokenWith(['webhooks:send']), 'webhooks:write'));
+        $this->assertTrue($checker->allows($this->tokenWith(['webhooks:write']), 'webhooks:read'));
+        $this->assertFalse($checker->allows($this->tokenWith(['webhooks:read']), 'webhooks:write'));
+        $this->assertFalse($checker->allows($this->tokenWith(['webhooks:write']), 'webhooks:send'));
+
+        $this->assertFalse($checker->allows($this->tokenWith(['accounts:send']), 'webhooks:read'));
+        $this->assertFalse($checker->allows($this->tokenWith(['webhooks:send']), 'accounts:read'));
+    }
+
     public function test_el_comodin_no_habilita_una_key(): void
     {
         // `["*"]` es lo que lleva un token WEB. Si una key se cuela con el comodín, no
