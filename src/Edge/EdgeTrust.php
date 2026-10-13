@@ -38,8 +38,12 @@ use Throwable;
  * y el portero, que no puede depender de que el dominio lo haya montado— y la segunda vez
  * sólo lee el veredicto.
  *
- * El secreto se saca del pedido apenas se lee, valga o no: lo que viene después —logs,
- * reportes de errores, Telescope— no lo tiene que ver nunca.
+ * El secreto se saca apenas se lee, valga o no, de todo lo que lee un reporte de errores: las
+ * cabeceras y el `server` del pedido, y `$_SERVER` / `$_ENV`, de donde un reporte arma el
+ * pedido cuando todavía no tiene el de Laravel —Sentry lo hace con un log emitido antes de
+ * su middleware—. Y nada de esta clase se loguea antes de sacarlo (auditoría de communities,
+ * 13-10). Lo que PHP guarda del pedido fuera de esos arrays —`getallheaders()` en PHP-FPM— no
+ * se puede borrar desde acá: eso lo cierra el `before_send` del dominio (README, «El borde»).
  */
 final class EdgeTrust
 {
@@ -49,19 +53,29 @@ final class EdgeTrust
 
     public const CLIENT_IP_HEADER = 'X-Funnelchat-Client-IP';
 
-    /** @param list<string> $publicHosts en minúsculas, `host` o `host:puerto` */
+    private const SECRET_SERVER_KEY = 'HTTP_X_FUNNELCHAT_EDGE';
+
+    /**
+     * @param list<string> $publicHosts en minúsculas, `host` o `host:puerto`
+     * @param list<array{string, array<string, mixed>}> $configErrors mensaje y contexto, para el log
+     */
     public function __construct(
         private readonly EdgeSecret $secret,
         private readonly array $publicHosts,
         private readonly LoggerInterface $logger,
+        private array $configErrors = [],
     ) {
     }
 
     /**
-     * Lee la configuración tal como la deja el dominio, y dice en el log lo que no acepta.
+     * Lee la configuración tal como la deja el dominio, y anota lo que no acepta.
      *
      * Lo que no se puede leer no se cree: un secreto corto no es secreto, y un host que no
      * es un host no entra a la lista. Nunca se loguea un valor de secreto.
+     *
+     * Lo anotado no se loguea acá: esto corre cuando el contenedor arma `TrustEdge`, con el
+     * secreto todavía en el pedido, y un reporte de errores que lo levante en ese momento se
+     * lo llevaría. Se loguea en el primer `inspect()`, ya sin el secreto.
      */
     public static function fromConfig(mixed $secret, mixed $nextSecret, mixed $publicHosts, LoggerInterface $logger): self
     {
@@ -70,14 +84,19 @@ final class EdgeTrust
             'PLATFORM_GATE_EDGE_SECRET_NEXT' => $nextSecret,
         ]);
 
+        $errors = [];
+
         foreach ($edgeSecret->rejected as $name) {
-            $logger->error(
+            $errors[] = [
                 "platform-gate: `{$name}` no se usa: tiene menos de ".EdgeSecret::MIN_LENGTH
-                .' caracteres o no es texto. Generalo con `openssl rand -hex 32`.'
-            );
+                .' caracteres o no es texto. Generalo con `openssl rand -hex 32`.',
+                [],
+            ];
         }
 
-        return new self($edgeSecret, self::readHosts($publicHosts, $logger), $logger);
+        $hosts = self::readHosts($publicHosts, $errors);
+
+        return new self($edgeSecret, $hosts, $logger, $errors);
     }
 
     public function isConfigured(): bool
@@ -98,8 +117,10 @@ final class EdgeTrust
 
         $presented = $request->headers->all(strtolower(self::SECRET_HEADER));
 
-        $request->headers->remove(self::SECRET_HEADER);
-        $request->server->remove('HTTP_X_FUNNELCHAT_EDGE');
+        // Primero se saca, después se loguea: cualquier log de acá en adelante puede terminar
+        // en un reporte de errores que arma el pedido en ese momento.
+        $this->forgetSecret($request);
+        $this->reportConfigErrors();
 
         // Una sola cabecera, y que coincida. Dos es un pedido que el Worker no arma —borra
         // la del cliente antes de poner la suya—, así que no se elige una.
@@ -121,6 +142,29 @@ final class EdgeTrust
         }
 
         return $verified;
+    }
+
+    /**
+     * Las cabeceras y el `server` del pedido, y los globales: sobre todo `$_SERVER`, de donde
+     * un reporte de errores arma el pedido si todavía no tiene el de Laravel. Si el pedido es
+     * un sub-pedido, igual se limpian: el secreto no tiene que estar en ningún lado.
+     */
+    private function forgetSecret(Request $request): void
+    {
+        $request->headers->remove(self::SECRET_HEADER);
+        $request->server->remove(self::SECRET_SERVER_KEY);
+
+        unset($_SERVER[self::SECRET_SERVER_KEY], $_ENV[self::SECRET_SERVER_KEY]);
+    }
+
+    /** Una vez por proceso: el singleton se queda sin nada que decir después del primer pedido. */
+    private function reportConfigErrors(): void
+    {
+        foreach ($this->configErrors as [$message, $context]) {
+            $this->logger->error($message, $context);
+        }
+
+        $this->configErrors = [];
     }
 
     private function trustPublicHost(Request $request): void
@@ -190,8 +234,12 @@ final class EdgeTrust
         }
     }
 
-    /** @return list<string> */
-    private static function readHosts(mixed $configured, LoggerInterface $logger): array
+    /**
+     * @param list<array{string, array<string, mixed>}> $errors se le agrega lo que no se acepta
+     *
+     * @return list<string>
+     */
+    private static function readHosts(mixed $configured, array &$errors): array
     {
         if ($configured === null || $configured === '') {
             return [];
@@ -202,7 +250,7 @@ final class EdgeTrust
         }
 
         if (! is_array($configured)) {
-            $logger->error('platform-gate: `PLATFORM_GATE_PUBLIC_HOSTS` no se puede leer: no se cree ningún host público.');
+            $errors[] = ['platform-gate: `PLATFORM_GATE_PUBLIC_HOSTS` no se puede leer: no se cree ningún host público.', []];
 
             return [];
         }
@@ -219,11 +267,11 @@ final class EdgeTrust
             // Un host, con puerto si hace falta (local). Una URL entera no: es el error más
             // probable, y aceptarla a medias sería creerle algo que nadie escribió.
             if (preg_match('/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/', $host) !== 1) {
-                $logger->error(
+                $errors[] = [
                     'platform-gate: un valor de `PLATFORM_GATE_PUBLIC_HOSTS` no es un host y se ignora. '
                     .'Va el host solo, sin `https://` ni ruta: `api.funnelchat.com`.',
                     ['value' => $host],
-                );
+                ];
 
                 continue;
             }
