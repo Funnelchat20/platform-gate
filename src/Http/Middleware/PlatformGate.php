@@ -10,8 +10,10 @@ use Funnelchat\PlatformGate\Caller\CallerContext;
 use Funnelchat\PlatformGate\Caller\CallerKind;
 use Funnelchat\PlatformGate\Caller\KeyIdentity;
 use Funnelchat\PlatformGate\Caller\KindColumnProbe;
+use Funnelchat\PlatformGate\Edge\EdgeTrust;
 use Funnelchat\PlatformGate\Exceptions\GateException;
 use Funnelchat\PlatformGate\Exceptions\GateUnavailable;
+use Funnelchat\PlatformGate\Exceptions\UsePublicEndpoint;
 use Funnelchat\PlatformGate\Limits\DailyCallCap;
 use Funnelchat\PlatformGate\Permissions\PermissionChecker;
 use Funnelchat\PlatformGate\Permissions\RoutePermissions;
@@ -50,7 +52,10 @@ final class PlatformGate
         private readonly LoggerInterface $logger,
         /** @var callable(mixed):array{0:?int,1:bool} */
         private $accountResolver,
+        private readonly EdgeTrust $edge,
         private readonly bool $blockOnUnreadableKind = false,
+        private readonly bool $requireEdge = false,
+        private readonly string $publicUrl = 'https://api.funnelchat.com',
     ) {
     }
 
@@ -58,8 +63,13 @@ final class PlatformGate
     {
         $this->startedAt = microtime(true);
 
+        // El borde se mira para cualquier llamador, no sólo para las keys: el host público y
+        // la IP del cliente valen para toda la respuesta. Si `TrustEdge` ya corrió, esto sólo
+        // lee su veredicto.
+        $fromEdge = $this->edge->inspect($request);
+
         try {
-            $this->classify($request);
+            $this->classify($request, $fromEdge);
         } catch (GateException $e) {
             return $this->reject($e);
         }
@@ -87,7 +97,7 @@ final class PlatformGate
         ));
     }
 
-    private function classify(Request $request): void
+    private function classify(Request $request, bool $fromEdge): void
     {
         $user = $this->resolveUser($request);
         $token = $user?->currentAccessToken();
@@ -188,6 +198,20 @@ final class PlatformGate
         // 403 y los 429 no quedarían en ningún lado. Pasó en la primera prueba de
         // integración: tres filas registradas de cinco llamadas.
         $this->keyIdForLog = $keyId;
+
+        // La exigencia del borde (Q14): con el interruptor encendido, una key sólo entra por
+        // la URL pública. Va antes que la ruta y los permisos porque la respuesta útil es "esa
+        // no es la dirección", no lo que diría el host interno. A `web` nunca se le pide: el
+        // panel le habla directo a su dominio.
+        if ($this->requireEdge && ! $fromEdge) {
+            // Sin secreto configurado no hay contra qué comparar: no es "evalué y no viene del
+            // borde" (403 terminal), es "no pude evaluar". Y nunca dejar pasar.
+            if (! $this->edge->isConfigured()) {
+                throw new GateUnavailable('edge_secret_not_configured');
+            }
+
+            throw new UsePublicEndpoint($this->publicUrl);
+        }
 
         $required = $this->routes->requiredFor($request);
         $this->permissions->assert($token, $required);

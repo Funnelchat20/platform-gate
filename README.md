@@ -18,6 +18,7 @@ Cuatro preguntas en cada request: **¿quién sos?**, **¿podés?**, **¿te pasas
 | Chequea el permiso que pide la ruta | Idempotencia |
 | Aplica el tope diario de **llamadas** por key | Autorización por cuenta (que el recurso sea de quien llama) |
 | Escribe una fila por llamada | Emitir, validar o revocar keys |
+| Reconoce lo que llega por el borde (`api.funnelchat.com`) y le cree host e IP | Rutear entre dominios — eso es el Worker |
 
 Los frenos de envío viven en la costura de salida de cada aplicación, no acá y no en la
 ruta: desde la tabla de rutas no se pueden enumerar los caminos de envío, porque hay rutas
@@ -38,13 +39,31 @@ El middleware va sobre el grupo de rutas de API que ya existe. **No crea rutas n
 
 ```php
 // bootstrap/app.php
+use Illuminate\Http\Request;
+
 ->withMiddleware(function (Middleware $middleware) {
+    // Sin X-Forwarded-Host ni X-Forwarded-Prefix: el host público lo fija el portero, y
+    // sólo cuando el pedido trae el secreto del borde. Ver «El borde».
+    $middleware->trustProxies(
+        at: '*',
+        headers: Request::HEADER_X_FORWARDED_FOR
+            | Request::HEADER_X_FORWARDED_PROTO
+            | Request::HEADER_X_FORWARDED_PORT,
+    );
+
+    // Global y al final del stack global: así todo el pedido ve el host y la IP del borde.
+    $middleware->append(\Funnelchat\PlatformGate\Http\Middleware\TrustEdge::class);
+
     $middleware->appendToGroup('api', \Funnelchat\PlatformGate\Http\Middleware\PlatformGate::class);
+})
+->withExceptions(function (Exceptions $exceptions) {
+    // El 401 de `api/*`, igual en todos los dominios.
+    \Funnelchat\PlatformGate\Http\UnauthenticatedResponse::register($exceptions);
 })
 ```
 
-Tiene que correr **después** de `auth:sanctum` —necesita el token resuelto— y **antes** de
-cualquier cosa de la aplicación que pregunte quién llama.
+`PlatformGate` tiene que correr **después** de `auth:sanctum` —necesita el token resuelto— y
+**antes** de cualquier cosa de la aplicación que pregunte quién llama.
 
 Requiere PHP ^8.2, Laravel ^11.9 o ^12.0, y Sanctum ^4.0.
 
@@ -69,6 +88,11 @@ Requiere PHP ^8.2, Laravel ^11.9 o ^12.0, y Sanctum ^4.0.
 // Superficie amplificada: una llamada, N efectos. Ningún permiso la habilita.
 'denied' => [
     'POST api/v1/recurso/{id}/ejecutar',
+],
+
+// Rutas que piden un prefijo de permiso propio en vez del dominio.
+'permission_prefix' => [
+    'api/v1/webhooks*' => 'webhooks',
 ],
 ```
 
@@ -96,6 +120,39 @@ decidido.
 igual. Es una defensa, no comodidad — con matcheo literal, un patrón con el nombre
 equivocado no falla ruidosamente: cae en la regla por método HTTP y puede clasificar una
 ruta de envío como escritura. Hay un test de regresión.
+
+### Permiso por ruta: `permission_prefix`
+
+Las listas de arriba deciden el **grado**; el **prefijo** del permiso es el dominio. Una
+ruta puede declarar otro prefijo, y entonces pide `{prefijo}:{grado}`:
+
+```php
+// config/platform-gate.php de accounts
+'permission_prefix' => [
+    'api/v1/webhooks*' => 'webhooks',
+],
+```
+
+| Ruta | Pide |
+|---|---|
+| `GET api/v1/webhooks` | `webhooks:read` |
+| `POST api/v1/webhooks`, `DELETE api/v1/webhooks/{id}` | `webhooks:write` |
+| `POST api/v1/webhooks/{id}/test`, si además está en `send` | `webhooks:send` |
+| `GET api/v1/devices` (no declarada) | `accounts:read`, como en 0.6 |
+
+- **La escalera vale dentro del prefijo:** `webhooks:send` ⇒ `webhooks:write` ⇒
+  `webhooks:read`. Nunca cruza: `accounts:write` no habilita nada de `webhooks`, y
+  `webhooks:write` no habilita nada de `accounts`.
+- **Se declara el prefijo, no el permiso entero.** El grado sigue saliendo del método y de
+  `send` / `operate`, así que declarar una ruta no le puede bajar el grado a una de envío, y
+  no hay un método que quede afuera por olvido. `'GET api/v1/webhooks' => 'webhooks:read'`
+  **no** es válido: corta, como se explica abajo.
+- **No abre superficie:** la ruta igual tiene que estar en `allowed`, y `denied` gana.
+- **Falla cerrado.** Si el mapa no se puede leer —un valor con `:`, vacío, con mayúsculas o
+  espacios, o una lista en vez de un mapa— ninguna ruta se puede clasificar con certeza, y
+  las llamadas de key a rutas de `allowed` reciben 503 `gate_unavailable`. Lo mismo si dos
+  patrones le dan prefijos distintos a la misma ruta: no se elige por orden de declaración.
+  Lo que ya estaba denegado sigue en 403.
 
 ### Cómo se leen el `kind` y los permisos del token
 
@@ -167,22 +224,211 @@ identificador de cuenta — ni en respuestas, ni en headers, ni en webhooks.
 
 ---
 
+## El borde: la URL única de la API
+
+La API pública tiene una sola dirección, `https://api.funnelchat.com` (staging:
+`https://api-staging.funnelchat.com`): un Worker de Cloudflare que reparte a los dominios.
+En cada pedido que reenvía borra lo que haya mandado el cliente y pone:
+
+| Cabecera | Valor |
+|---|---|
+| `X-Funnelchat-Edge` | El secreto del borde. |
+| `X-Forwarded-Host` | El host público del pedido. |
+| `X-Funnelchat-Client-IP` | La IP del cliente (`CF-Connecting-IP`). |
+
+**El portero le cree al pedido sólo con el secreto válido.** Lo compara en tiempo constante
+contra dos valores, el actual y el siguiente, para poder rotar sin cortar. Con secreto
+válido:
+
+- toma `X-Forwarded-Host` si está en `PLATFORM_GATE_PUBLIC_HOSTS`, y lo fija como host del
+  pedido: `$request->url()`, los links del paginador y `url()` / `route()` salen con el host
+  público;
+- toma `X-Funnelchat-Client-IP` como `X-Forwarded-For`, así `$request->ip()` —el log y los
+  límites por IP del dominio— devuelve la IP del cliente.
+
+Sin secreto válido no le cree ninguna de las dos. Para que eso alcance, el dominio tampoco
+tiene que creerle `X-Forwarded-Host` en su `trustProxies`: si se lo cree, Laravel le cree al
+cliente antes de que el portero pueda decir nada. Es lo que se vio en staging el 09-10.
+
+**El secreto no sigue en el pedido.** Se saca apenas se lee, valga o no: lo que corre
+después —logs, reportes de errores— no lo ve. Lo que corre **antes** de `TrustEdge` sí lo
+pudo ver: si el dominio manda cabeceras a un servicio de errores desde un middleware global
+que corre primero, agregá `X-Funnelchat-Edge` a las que se limpian.
+
+**Un secreto de menos de 32 caracteres no cuenta.** Queda en el log como error y no se usa.
+Generalo con `openssl rand -hex 32`.
+
+**La exigencia** (`PLATFORM_GATE_REQUIRE_EDGE`), apagada por defecto. Encendida, una key que
+no llega con el secreto válido recibe 403 `use_public_endpoint`, con la URL pública en el
+mensaje (`PUBLIC_API_URL`). A la sesión del panel (`web`) nunca se le pide el secreto. Si la
+exigencia está encendida y el dominio no tiene ningún secreto configurado, el portero no
+tiene contra qué comparar: 503 `gate_unavailable`, nunca dejar pasar.
+
+**`TrustEdge` y el portero.** `TrustEdge` es el middleware global que hace la inspección
+para todo el pedido. Si el dominio no lo monta, el portero la hace igual al correr —la
+exigencia no depende de que alguien se acuerde—, pero lo que corre antes del portero ve el
+host interno y la IP del Worker.
+
+---
+
 ## Respuestas de rechazo
 
 | Situación | Status | `error` | Terminal o reintentable |
 |---|---|---|---|
+| Sin credencial o credencial inválida en `api/*` (con `UnauthenticatedResponse` enganchado) | 401 | `unauthenticated` | Terminal |
 | Le falta el permiso | 403 | `permission_denied` | Terminal |
 | Ruta fuera de `allowed`, o de la superficie amplificada | 403 | `route_not_available` | Terminal — no hay permiso que pedir |
+| Una key llegó directo a un host interno y el dominio exige el borde | 403 | `use_public_endpoint` | Terminal — hay que cambiar la URL |
 | Se pasó del tope diario | 429 + `Retry-After` | `daily_cap_exceeded` | Terminal por hoy |
 | **No se pudo evaluar** | 503 + `Retry-After` | `gate_unavailable` | **Reintentable** |
 
 "No se pudo evaluar" incluye: el store del contador no responde, `kind` no se puede leer o
-tiene un valor desconocido, y la lista de permisos de la key no se puede leer.
+tiene un valor desconocido, la lista de permisos de la key no se puede leer,
+`permission_prefix` no se puede leer o le da dos prefijos a la misma ruta, y la exigencia
+del borde está encendida sin ningún secreto configurado.
+
+El 401 lo tira el `auth:sanctum` del dominio, antes de que corra el portero; por eso es algo
+que el dominio engancha. Fuera de `api/*` no cambia nada.
 
 La última es la que importa: si el store se cae, **corta, no deja pasar**. Dejar pasar
 cuando no se puede evaluar es el agujero clásico — el cliente automatizado se pasa del
 límite justo cuando el control no responde. Y "no pude evaluar" nunca se colapsa con
 "evalué y está denegado": son dos respuestas para el cliente y dos métricas para vos.
+
+---
+
+## Actualizar desde 0.6
+
+Versión **0.7.0**.
+
+**Por qué.** El 10-10 se decidió que la API pública tenga una sola dirección,
+`https://api.funnelchat.com`: un Worker de Cloudflare que reparte a accounts, conversations y
+communities. Las keys tienen que entrar sólo por ahí, y nadie tiene que poder hacerse pasar
+por el borde. Además, el 09-10 se comprobó en staging que cualquiera podía mandarle
+`X-Forwarded-Host` directo a accounts o a conversations y cambiar los links que arma
+Laravel, porque las dos le creen esa cabecera a cualquiera (`trustProxies(at: '*')`). Y
+accounts necesita que sus rutas de webhooks pidan `webhooks:read` / `webhooks:write`, no
+`accounts:{grado}` (Q48). Contrato: `1012-url-unica` v0, iniciativa api-abierta.
+
+**Sin configurar nada, 0.7 se comporta como 0.6:** sin secreto no se le cree nada a nadie,
+la exigencia está apagada y, sin `permission_prefix`, cada ruta pide lo mismo que antes. Lo
+único que hace sola es sacar `X-Funnelchat-Edge` de cada pedido. No hace falta volver a
+publicar la config: las claves nuevas toman su valor por defecto aunque tu
+`config/platform-gate.php` publicado no las tenga.
+
+### 1. Variables de entorno
+
+| Variable | Qué es | Valor |
+|---|---|---|
+| `PLATFORM_GATE_EDGE_SECRET` | El secreto del borde, el actual. | `openssl rand -hex 32`; el mismo que el Worker. No pasa por el chat, el repo ni los logs. |
+| `PLATFORM_GATE_EDGE_SECRET_NEXT` | El siguiente, para rotar. | Vacío. |
+| `PLATFORM_GATE_PUBLIC_HOSTS` | Hosts públicos aceptados, separados por coma, sin `https://`. | `api.funnelchat.com` en producción; `api-staging.funnelchat.com` en staging. |
+| `PLATFORM_GATE_REQUIRE_EDGE` | La exigencia. | `false`. |
+| `PUBLIC_API_URL` | La URL que el 403 `use_public_endpoint` le dice a quien integra. La misma que muestran Scramble y la pantalla de Desarrolladores. | `https://api.funnelchat.com`; en staging, `https://api-staging.funnelchat.com`. |
+
+### 2. `bootstrap/app.php`
+
+**`trustProxies`: sacá `X-Forwarded-Host` y dejá `For`, `Proto` y `Port`.** Ojo:
+`trustProxies(at: '*')` sin `headers` usa el default de Laravel, que además de Host incluye
+`X-Forwarded-Prefix` —cambia la ruta de los links del mismo modo que Host cambia el host—.
+Las dos se van:
+
+```php
+use Illuminate\Http\Request;
+
+// 0.6
+$middleware->trustProxies(at: '*');
+
+// 0.7
+$middleware->trustProxies(
+    at: '*',
+    headers: Request::HEADER_X_FORWARDED_FOR
+        | Request::HEADER_X_FORWARDED_PROTO
+        | Request::HEADER_X_FORWARDED_PORT,
+);
+```
+
+Si el dominio no llama a `trustProxies` ni tiene `config/trustedproxy.php` (communities):
+Laravel 12 —verificado en `laravel/framework` v12.69.3, el que instala este repo— no le cree
+a ningún proxy, salvo cuando el host termina en `.on-vapor.com` o `.on-forge.com`, o en
+Laravel Cloud: ahí le cree a todos, pero antes borra `X-Forwarded-Host`. Así que en ningún
+caso le cree `X-Forwarded-Host`. Fuera de esos hosts tampoco le cree `X-Forwarded-For`, y
+entonces la IP del cliente que manda el borde no llega a `$request->ip()`: si la querés para
+el log y los límites por IP, agregá el mismo bloque. Tu versión de Laravel puede no ser ésa:
+el test del paso 4 lo dice.
+
+**`TrustEdge`, global y al final:**
+
+```php
+$middleware->append(\Funnelchat\PlatformGate\Http\Middleware\TrustEdge::class);
+```
+
+Al final y no al principio: el `TrustProxies` de Laravel mira el host original para decidir
+en qué proxies confía.
+
+**El 401:**
+
+```php
+->withExceptions(function (Exceptions $exceptions) {
+    \Funnelchat\PlatformGate\Http\UnauthenticatedResponse::register($exceptions);
+})
+```
+
+En `api/*`, el 401 pasa de `{"message": "Unauthenticated."}` a
+`{"error": "unauthenticated", "message": "Falta la API key o no es válida."}`, con
+`WWW-Authenticate: Bearer`, también cuando el pedido no pide JSON (antes era una
+redirección al login). Si el panel lee el texto del 401, revisalo; si sólo mira el status,
+no cambia nada. Otro prefijo: `register($exceptions, 'v2/*')`.
+
+### 3. Lo que puede impedir que los links salgan con el host público
+
+- **`URL::forceRootUrl(...)`** en un service provider: `url()` y `route()` ignoran el host
+  del pedido y siempre salen con esa raíz. El paginador no, porque usa `$request->url()`.
+  Si tu dominio lo llama, los links de `url()` / `route()` no van a salir con el host
+  público.
+- **`trustHosts(...)`**: agregá los hosts públicos, o Laravel rechaza el pedido por host no
+  confiable.
+
+### 4. Tests del dominio, antes de deployar
+
+- Pedido directo al host interno con `X-Forwarded-Host: ejemplo-externo.test`: los links
+  **no** cambian.
+- Con `X-Funnelchat-Edge` válido y `X-Forwarded-Host: api.funnelchat.com`: sí.
+- El panel sigue igual: un test de una ruta que usa el panel y uno de una ruta con key.
+
+### 5. Sólo accounts: los webhooks
+
+```php
+'permission_prefix' => ['api/v1/webhooks*' => 'webhooks'],
+```
+
+Desde ese momento, una key con `accounts:*` y sin `webhooks:*` deja de alcanzar los webhooks
+(403 `permission_denied`). Antes de declararlo, que las keys que los usan tengan
+`webhooks:read` / `webhooks:write`.
+
+### Orden
+
+1. platform-gate 0.7.0.
+2. accounts, conversations y communities, cada uno con la exigencia **apagada**: variables
+   cargadas (paso 1), y en el mismo deploy la versión 0.7, `trustProxies`, `TrustEdge` y el
+   401 (paso 2).
+3. api-edge en staging; después en producción.
+4. El portal; los usuarios de la beta cambian la URL.
+5. `PLATFORM_GATE_REQUIRE_EDGE=true`, dominio por dominio, cuando quienes integran ya usan
+   la URL nueva. Antes, revisá que el log de ese dominio no tenga
+   `X-Funnelchat-Edge … no coincide`: con la exigencia encendida, eso es un 403 para cada key.
+
+### Rotar el secreto
+
+1. Generá el nuevo y cargalo como `PLATFORM_GATE_EDGE_SECRET_NEXT` en todos los dominios.
+2. Cambiá el del Worker (`wrangler secret put`). Durante el cambio valen los dos.
+3. En cada dominio, el nuevo pasa a `PLATFORM_GATE_EDGE_SECRET` y el siguiente vuelve a
+   quedar vacío.
+
+### Código
+
+El constructor de `PlatformGate` recibe dependencias nuevas. Si lo arma el contenedor —lo
+normal—, no hay nada que hacer.
 
 ---
 

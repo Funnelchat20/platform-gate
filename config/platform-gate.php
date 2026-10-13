@@ -81,6 +81,30 @@ return [
 
     /*
     |---------------------------------------------------------------------------
+    | Prefijo de permiso propio — rutas que no piden `{dominio}:{grado}` (Q48)
+    |---------------------------------------------------------------------------
+    | Patrón => prefijo. Las rutas que machean piden `{prefijo}:{grado}` en vez de
+    | `{dominio}:{grado}`. El grado sale igual que siempre: GET/HEAD/OPTIONS `read`,
+    | el resto `write`, y `send` / `operate` si la ruta está en esas listas. La
+    | escalera vale dentro del prefijo: `webhooks:write` habilita `webhooks:read`, y
+    | `accounts:write` no habilita nada de `webhooks`.
+    |
+    |   'api/v1/webhooks*' => 'webhooks',
+    |
+    | Se declara el PREFIJO, no el permiso entero: así declarar una ruta no puede
+    | bajarle el grado a una de envío, ni dejar afuera un método.
+    |
+    | No abre superficie: la ruta igual tiene que estar en `allowed`. Una ruta que
+    | no machea acá pide `{dominio}:{grado}`, como en 0.6.
+    |
+    | Falla cerrado: un valor que no es un prefijo (`webhooks:read`, vacío, con
+    | mayúsculas) o dos patrones que le dan prefijos distintos a la misma ruta
+    | cortan las llamadas de key con 503 `gate_unavailable`, no caen al dominio.
+    */
+    'permission_prefix' => [],
+
+    /*
+    |---------------------------------------------------------------------------
     | Guard con el que se resuelve al llamador
     |---------------------------------------------------------------------------
     | El portero pregunta quién llama con este guard EXPLÍCITAMENTE, en vez de
@@ -94,6 +118,39 @@ return [
     | Con esto, la posición del middleware en la cadena deja de importar.
     */
     'auth_guard' => env('PLATFORM_GATE_AUTH_GUARD', 'sanctum'),
+
+    /*
+    |---------------------------------------------------------------------------
+    | El borde — la URL única de la API (0.7)
+    |---------------------------------------------------------------------------
+    | La API pública entra por `https://api.funnelchat.com`: un Worker que reenvía
+    | a cada dominio con `X-Funnelchat-Edge` (el secreto), `X-Forwarded-Host` (el
+    | host público) y `X-Funnelchat-Client-IP` (la IP del cliente).
+    |
+    | Con el secreto válido, el portero le cree al pedido el host —si está en
+    | `public_hosts`— y la IP. Sin secreto válido, no le cree ninguna de las dos.
+    |
+    | Dos secretos para rotar sin cortar: valen el actual y el siguiente. Se
+    | comparan en tiempo constante; menos de 32 caracteres no cuenta como secreto.
+    | Nunca van en código, logs ni respuestas: el portero saca la cabecera del
+    | pedido apenas la lee.
+    */
+    'edge_secret' => env('PLATFORM_GATE_EDGE_SECRET'),
+    'edge_secret_next' => env('PLATFORM_GATE_EDGE_SECRET_NEXT'),
+
+    // Hosts públicos aceptados, separados por coma: `api.funnelchat.com` en
+    // producción, `api-staging.funnelchat.com` en staging. El host solo, sin
+    // `https://`. Vacío = no se cree ningún `X-Forwarded-Host`.
+    'public_hosts' => env('PLATFORM_GATE_PUBLIC_HOSTS', ''),
+
+    // La exigencia (Q14). Encendida, una key que no llega por el borde recibe 403
+    // `use_public_endpoint`. A `web` nunca se le pide. Apagada por defecto: se
+    // enciende dominio por dominio cuando los integradores ya usan la URL nueva.
+    'require_edge' => (bool) env('PLATFORM_GATE_REQUIRE_EDGE', false),
+
+    // La URL que el 403 `use_public_endpoint` le dice a quien integra que use.
+    // La misma variable que muestran Scramble y la pantalla de Desarrolladores.
+    'public_url' => env('PUBLIC_API_URL', 'https://api.funnelchat.com'),
 
     /*
     |---------------------------------------------------------------------------
