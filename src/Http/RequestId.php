@@ -84,12 +84,27 @@ final readonly class RequestId
     }
 
     /**
-     * Le pone `X-Request-Id` a la respuesta. El del portero gana: si el dominio puso otro, el
-     * cliente citaría un id que no está en ninguna fila.
+     * Le pone `X-Request-Id` a la respuesta, reemplazando el que haya. Es lo que hace el
+     * portero: en un pedido que pasó por él hay una fila con este id, y si el dominio puso
+     * otro, el cliente citaría uno que no está en ninguna.
      */
     public function stamp(Request $request, Response $response): Response
     {
         $response->headers->set(self::RESPONSE_HEADER, $this->for($request));
+
+        return $response;
+    }
+
+    /**
+     * Le pone `X-Request-Id` sólo si la respuesta no trae uno. Es lo que hace `TrustEdge`, que es
+     * global: en lo que no pasó por el portero no hay fila que citar, y el id propio del dominio
+     * —si tiene uno— es el que sus logs conocen.
+     */
+    public function stampIfMissing(Request $request, Response $response): Response
+    {
+        if (! $response->headers->has(self::RESPONSE_HEADER)) {
+            $response->headers->set(self::RESPONSE_HEADER, $this->for($request));
+        }
 
         return $response;
     }

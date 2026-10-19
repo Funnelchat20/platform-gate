@@ -276,8 +276,12 @@ con el que soporte encuentra la fila y los logs.
 - **Si no**, el portero genera un UUID v4. Un `X-Funnelchat-Request-Id` que llega sin el
   secreto lo pudo mandar cualquiera, y no se le cree; uno del borde que no es un UUID se
   descarta y queda un warning en el log, sin el valor.
-- **El del portero gana.** Si el dominio pone su propio `X-Request-Id` en la respuesta, se
-  reemplaza: si no, el cliente citaría un id que no está en ninguna fila.
+- **En lo que pasa por el portero, el del portero gana.** Si el dominio pone su propio
+  `X-Request-Id` en la respuesta, se reemplaza: si no, el cliente citaría un id que no está en
+  ninguna fila.
+- **En el resto, el del dominio se respeta.** `TrustEdge` es global: en una respuesta que no
+  pasó por el portero sólo pone `X-Request-Id` si no trae uno. Ahí no hay fila que citar, y el
+  id propio del dominio es el que conocen sus logs.
 - **Va al log.** Se suma como `request_id` al contexto compartido del log del dominio
   (`Log::shareContext()`) en cuanto se decide: si `TrustEdge` está montado, desde el
   principio del pedido; si no, desde que corre el portero.
@@ -459,11 +463,13 @@ registro pasa de seis campos a nueve, y deja de ser "sin purga". Sigue sin PII n
 **Qué cambia:**
 
 - **`X-Request-Id` en cada respuesta** que pasa por `TrustEdge` o el portero, también en sus
-  rechazos y en el 401 de `UnauthenticatedResponse`. Si el dominio ya ponía un `X-Request-Id`
-  propio, desde ahora sale el del portero. El id va a la fila y al contexto del log
+  rechazos y en el 401 de `UnauthenticatedResponse`. El id va a la fila y al contexto del log
   (`request_id`). Ver «El id del pedido».
-- **`TrustEdge` agrega `X-Request-Id` a todas las respuestas del dominio**, no sólo a las de
-  `api/*`: es global.
+- **Si el dominio ya ponía un `X-Request-Id` propio:** en los pedidos que pasan por el portero
+  desde ahora sale el del portero, que es el de la fila. En el resto sale el del dominio, como
+  antes.
+- **`TrustEdge` agrega `X-Request-Id` a todas las respuestas del dominio que no traen uno**, no
+  sólo a las de `api/*`: es global.
 - **`CreatedResource::declare()`**, para que el controlador diga qué creó la llamada.
 - **Migración nueva** (`2026_10_19_000001`): `request_id`, `resource_type` y `resource_id` en
   `api_call_log`, las tres nullable, y un índice por `request_id`. La de 0.7 no cambia. Las

@@ -59,6 +59,11 @@ final class RequestIdHttpTest extends GateTestCase
 
         $router->middleware(PlatformGate::class)->get('api/v1/broken', static fn () => throw new RuntimeException('se rompió'));
 
+        // Fuera del portero, con y sin un `X-Request-Id` propio del dominio.
+        $router->get('panel/own-id', static fn () => response('ok')->header(RequestId::RESPONSE_HEADER, 'id-del-dominio'));
+        $router->get('panel/plain', static fn () => response('ok'));
+        $router->middleware(PlatformGate::class)->get('api/v1/own-id', static fn () => response('ok')->header(RequestId::RESPONSE_HEADER, 'id-del-dominio'));
+
         $router->get('api/v1/private', static fn () => throw new AuthenticationException());
     }
 
@@ -126,6 +131,29 @@ final class RequestIdHttpTest extends GateTestCase
         ]);
 
         $response->assertStatus(500)->assertHeader(RequestId::RESPONSE_HEADER, self::EDGE_ID);
+        $this->assertSame(self::EDGE_ID, $this->onlyRow()['request_id']);
+    }
+
+    public function test_fuera_del_portero_se_respeta_el_id_del_dominio(): void
+    {
+        $this->get('panel/own-id', [EdgeTrust::SECRET_HEADER => self::SECRET, RequestId::EDGE_HEADER => self::EDGE_ID])
+            ->assertOk()
+            ->assertHeader(RequestId::RESPONSE_HEADER, 'id-del-dominio');
+    }
+
+    public function test_fuera_del_portero_sin_id_propio_se_pone_el_del_pedido(): void
+    {
+        $this->get('panel/plain', [EdgeTrust::SECRET_HEADER => self::SECRET, RequestId::EDGE_HEADER => self::EDGE_ID])
+            ->assertOk()
+            ->assertHeader(RequestId::RESPONSE_HEADER, self::EDGE_ID);
+    }
+
+    public function test_por_el_portero_el_id_del_portero_reemplaza_al_del_dominio(): void
+    {
+        $this->getJson('api/v1/own-id', [EdgeTrust::SECRET_HEADER => self::SECRET, RequestId::EDGE_HEADER => self::EDGE_ID])
+            ->assertOk()
+            ->assertHeader(RequestId::RESPONSE_HEADER, self::EDGE_ID);
+
         $this->assertSame(self::EDGE_ID, $this->onlyRow()['request_id']);
     }
 

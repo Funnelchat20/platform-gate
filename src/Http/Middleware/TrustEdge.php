@@ -26,7 +26,9 @@ use Symfony\Component\HttpFoundation\Response;
  *
  * Desde 0.8 también decide el id del pedido (`RequestId`): así el log de todo el pedido lo
  * lleva, y `X-Request-Id` sale en todas las respuestas del dominio —también un 500 o un 401
- * que no pasaron por el portero—.
+ * que no pasaron por el portero—. Sólo si la respuesta no trae uno: en los pedidos que pasan
+ * por el portero, el portero ya puso el suyo, reemplazando el del dominio; en el resto, el
+ * del dominio se respeta.
  */
 final class TrustEdge
 {
@@ -42,6 +44,6 @@ final class TrustEdge
         $this->edge->inspect($request);
         $this->requestIds->for($request);
 
-        return $this->requestIds->stamp($request, $next($request));
+        return $this->requestIds->stampIfMissing($request, $next($request));
     }
 }
