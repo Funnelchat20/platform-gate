@@ -503,11 +503,12 @@ registro pasa de seis campos a nueve, y deja de ser "sin purga". Sigue sin PII n
 - **`platform-gate:purge-usage`** y `PLATFORM_GATE_USAGE_RETENTION_DAYS` (90).
 - El paquete pide `illuminate/console`. Un dominio con `laravel/framework` ya lo tiene.
 
-**Cómo subir, en cada dominio.** Si venís de 0.6 (accounts y communities fijan `0.6.0`),
-primero «Actualizar desde 0.6»; las dos guías se pueden hacer en el mismo deploy.
+**Cómo subir, en cada dominio.** Si venís de 0.6, primero «Actualizar desde 0.6»; las dos
+guías se pueden hacer en el mismo deploy.
 
 1. **La versión.** `composer require funnelchat20/platform-gate:^0.8`. Con `^0.7` no alcanza:
-   en `0.x`, la menor es la que rompe.
+   en `0.x`, la menor es la que rompe. communities fija la versión exacta (`0.7.1`, sin `^`):
+   ahí el `composer require` reemplaza esa restricción.
 2. **La migración**, en la conexión de uso de ese dominio (accounts `mysql`, conversations
    `mysql`, communities `groups`): `php artisan migrate`. Si la conexión de uso no es la de
    por defecto, la migración ya la toma de `PLATFORM_GATE_USAGE_CONNECTION`. En una tabla
@@ -541,10 +542,13 @@ primero «Actualizar desde 0.6»; las dos guías se pueden hacer en el mismo dep
 
 **Orden.** El portero lee el id que pone la entrada, así que cualquier orden es seguro: sin el
 portero nuevo, la cabecera del borde se ignora; sin el borde nuevo, el portero genera el id.
+El que conviene:
 
 1. platform-gate 0.8.0.
-2. api-edge (manda `X-Funnelchat-Request-Id` y devuelve el `X-Request-Id` del dominio).
-3. accounts, conversations y communities, en cualquier orden.
+2. accounts, conversations y communities, en cualquier orden.
+3. api-edge (manda `X-Funnelchat-Request-Id` y devuelve el `X-Request-Id` del dominio). Antes
+   de los dominios también funciona, pero el id que devuelve sólo queda en los logs de la
+   entrada hasta que el dominio sube la versión del portero.
 4. El portal documenta `X-Request-Id`.
 
 **Código.** `PlatformGate` y `TrustEdge` reciben dependencias nuevas —`RequestId`, y en el

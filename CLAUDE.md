@@ -22,9 +22,9 @@ Proprietary software (see `LICENSE`).
 
 | Consumer | Constraint today | How it upgrades |
 |---|---|---|
-| accounts | `0.6.0` (pinned) | its own `fcdev delegate accounts` + `deliver` |
-| communities | `0.6.0` (pinned) | its own `fcdev delegate communities` + `deliver` |
-| conversations | `^0.6` | its own `fcdev delegate conversations` + `deliver` |
+| accounts | `^0.7` (lock `v0.7.1`) | its own `fcdev delegate accounts` + `deliver` |
+| communities | `0.7.1` (pinned) | its own `fcdev delegate communities` + `deliver` |
+| conversations | `^0.7` (lock `v0.7.1`) | its own `fcdev delegate conversations` + `deliver` |
 | super-agents (planned) | Python port of the gate | shares this repo's test vectors |
 
 A change here does nothing until each consumer upgrades. Never change a consumer from this repo.
