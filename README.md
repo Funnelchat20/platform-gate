@@ -83,6 +83,12 @@ use Illuminate\Http\Request;
 
 Requiere PHP ^8.2, Laravel ^11.9 o ^12.0, y Sanctum ^4.0.
 
+**Lo probado es Laravel 12.** La suite pasa con las versiones más bajas que Composer deja
+instalar (`composer update --prefer-lowest`: `laravel/framework` 12.69.0, testbench 10.0.0) y
+con las de siempre. Laravel 11 no se pudo probar: todas las 11.x, la última incluida, tienen
+avisos de seguridad sin parche, y Composer 2.9 en adelante no las instala. Los tres dominios
+están en Laravel 12.
+
 ---
 
 ## Configuración
