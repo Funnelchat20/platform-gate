@@ -282,6 +282,11 @@ con el que soporte encuentra la fila y los logs.
 - **En el resto, el del dominio se respeta.** `TrustEdge` es global: en una respuesta que no
   pasó por el portero sólo pone `X-Request-Id` si no trae uno. Ahí no hay fila que citar, y el
   id propio del dominio es el que conocen sus logs.
+- **Ojo: en ese caso el `request_id` del log no es el que ve el cliente.** `TrustEdge` ya lo
+  puso en el contexto del log al principio del pedido, antes de saber que el dominio iba a
+  contestar con su propio id. Sólo pasa si el dominio pone su propio `X-Request-Id`, y sólo
+  fuera del portero: para encontrar ese pedido en el log, buscá por el id del dominio, no por
+  `request_id`.
 - **Va al log.** Se suma como `request_id` al contexto compartido del log del dominio
   (`Log::shareContext()`) en cuanto se decide: si `TrustEdge` está montado, desde el
   principio del pedido; si no, desde que corre el portero. Al terminar el pedido (el
