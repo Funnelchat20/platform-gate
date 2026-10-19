@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnelchat\PlatformGate\Usage;
 
 use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use PDOException;
 use Psr\Log\LoggerInterface;
@@ -119,13 +120,18 @@ final class ApiCallRecorder
     }
 
     /**
-     * «Columna desconocida» y nada más: cualquier otra falla —la base caída, un deadlock, un
-     * valor que no entra— no se arregla escribiendo menos columnas, y reintentarla diría
-     * "corré la migración" sobre un problema que es otro.
+     * «Columna desconocida» de una de las columnas de 0.8, y nada más: cualquier otra falla —la
+     * base caída, un deadlock, un valor que no entra, o que falte `key_id`— no se arregla
+     * escribiendo menos columnas, y reintentarla diría "corré la migración" sobre un problema que
+     * es otro.
      *
-     *   MySQL / MariaDB ... SQLSTATE 42S22, código 1054 (`Unknown column`)
-     *   PostgreSQL ........ SQLSTATE 42703 (`undefined_column`)
-     *   SQLite ............ HY000 genérico: sólo el texto lo dice (`has no column named`)
+     *   MySQL / MariaDB ... SQLSTATE 42S22, código 1054 (`Unknown column 'request_id'`)
+     *   PostgreSQL ........ SQLSTATE 42703 (`column "request_id" … does not exist`)
+     *   SQLite ............ HY000 genérico: sólo el texto lo dice (`has no column named request_id`)
+     *
+     * La columna se busca en el texto del DRIVER (`errorInfo[2]`, o el mensaje del PDOException),
+     * nunca en el de `QueryException`: ése incluye el INSERT entero, que siempre nombra
+     * `request_id`, y cualquier columna desconocida pasaría por una de las nuevas.
      */
     private static function isMissingColumn(Throwable $e): bool
     {
@@ -137,12 +143,28 @@ final class ApiCallRecorder
             $info = is_array($e->errorInfo) ? $e->errorInfo : [];
             $state = (string) ($info[0] ?? $e->getCode());
             $code = $info[1] ?? null;
+            $text = $info[2] ?? ($e instanceof QueryException ? null : $e->getMessage());
+
+            if (! is_string($text) || ! self::namesAColumnOf08($text)) {
+                continue;
+            }
 
             if (in_array($state, ['42S22', '42703'], true) || (int) $code === 1054) {
                 return true;
             }
 
-            if ($state === 'HY000' && str_contains((string) ($info[2] ?? $e->getMessage()), 'has no column named')) {
+            if ($state === 'HY000' && str_contains($text, 'has no column named')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function namesAColumnOf08(string $text): bool
+    {
+        foreach (ApiCall::ADDED_IN_0_8 as $column) {
+            if (preg_match('/(?<![A-Za-z0-9_])'.preg_quote($column, '/').'(?![A-Za-z0-9_])/', $text) === 1) {
                 return true;
             }
         }

@@ -186,6 +186,10 @@ final class ApiCallRecorderTest extends TestCase
         yield 'no existe la tabla (MySQL)' => [self::queryException(['42S02', 1146, "Table 'x.api_call_log' doesn't exist"])];
         yield 'valor que no entra' => [self::queryException(['22001', 1406, "Data too long for column 'route'"])];
         yield 'no es de la base' => [new RuntimeException('Unknown column, pero no de PDO')];
+        yield 'otra columna desconocida (MySQL)' => [self::queryException(['42S22', 1054, "Unknown column 'key_id' in 'field list'"])];
+        yield 'otra columna desconocida (PostgreSQL)' => [self::queryException(['42703', 7, 'column "duration_ms" of relation "api_call_log" does not exist'])];
+        yield 'otra columna desconocida (SQLite)' => [self::queryException(['HY000', 1, 'table api_call_log has no column named route'])];
+        yield 'una columna que sólo se parece' => [self::queryException(['42S22', 1054, "Unknown column 'request_id_old' in 'field list'"])];
     }
 
     #[DataProvider('otherFailures')]
@@ -196,6 +200,24 @@ final class ApiCallRecorderTest extends TestCase
         $recorder->record($this->call());
 
         $this->assertCount(1, $this->inserts, 'un solo INSERT: no se reintenta');
+        $this->assertSame([['warning', 'platform-gate: no se pudo registrar la llamada']], $this->logged);
+    }
+
+    public function test_el_insert_que_nombra_request_id_no_alcanza_si_el_driver_nombra_otra_columna(): void
+    {
+        // El mensaje de `QueryException` trae el SQL, que siempre nombra `request_id`: no cuenta.
+        $failure = self::queryException(['42S22', 1054, "Unknown column 'key_id' in 'field list'"]);
+
+        $recorder = $this->recorder(static fn () => throw new QueryException(
+            'mysql',
+            'insert into api_call_log (key_id, route, request_id) values (?, ?, ?)',
+            [],
+            $failure->getPrevious(),
+        ));
+
+        $recorder->record($this->call());
+
+        $this->assertCount(1, $this->inserts);
         $this->assertSame([['warning', 'platform-gate: no se pudo registrar la llamada']], $this->logged);
     }
 
