@@ -6,6 +6,7 @@ namespace Funnelchat\PlatformGate\Http;
 
 use Funnelchat\PlatformGate\Edge\EdgeTrust;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 use Psr\Log\LoggerInterface;
 use ReflectionMethod;
 use Symfony\Component\HttpFoundation\Response;
@@ -43,8 +44,6 @@ final readonly class RequestId
 
     /** La que ve el cliente, en todas las respuestas. */
     public const RESPONSE_HEADER = 'X-Request-Id';
-
-    private const UUID = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/D';
 
     public function __construct(
         private EdgeTrust $edge,
@@ -135,7 +134,8 @@ final readonly class RequestId
         // no se sabe qué es.
         $id = count($values) === 1 ? strtolower(trim((string) $values[0])) : '';
 
-        if (preg_match(self::UUID, $id) !== 1) {
+        // Sin versión, `Str::isUuid()` es sólo el formato: no necesita `ramsey/uuid`.
+        if (! Str::isUuid($id)) {
             $this->logger->warning(
                 'platform-gate: el borde mandó un `X-Funnelchat-Request-Id` que no es un UUID: se ignora y el portero genera otro.'
             );
