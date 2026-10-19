@@ -47,6 +47,8 @@ final class CreatedResourceTest extends GateTestCase
         yield 'entero' => ['message', 981, '981'];
         yield 'entero como texto' => ['contact', '42', '42'];
         yield 'el BIGINT UNSIGNED más grande' => ['message', '18446744073709551615', '18446744073709551615'];
+        yield '20 dígitos por debajo del tope' => ['message', '10000000000000000000', '10000000000000000000'];
+        yield 'el entero más grande de PHP' => ['message', PHP_INT_MAX, (string) PHP_INT_MAX];
         yield 'uuid' => ['scheduled_message', '0b8f5d2e-6c41-4a7e-9f3d-2a1b7c9e4d60', '0b8f5d2e-6c41-4a7e-9f3d-2a1b7c9e4d60'];
         yield 'uuid en mayúsculas' => ['webhook_subscription', '0B8F5D2E-6C41-4A7E-9F3D-2A1B7C9E4D60', '0b8f5d2e-6c41-4a7e-9f3d-2a1b7c9e4d60'];
         yield 'ulid' => ['tag', '01JA2B3C4D5E6F7G8H9J0K1M2N', '01JA2B3C4D5E6F7G8H9J0K1M2N'];
@@ -116,6 +118,8 @@ final class CreatedResourceTest extends GateTestCase
         yield 'negativo como texto' => ['message', '-5', 'id', null];
         yield 'con ceros adelante' => ['message', '007', 'id', null];
         yield 'entero de 21 dígitos' => ['message', '123456789012345678901', 'id', '123456789012345678901'];
+        yield 'uno más que el BIGINT UNSIGNED más grande' => ['message', '18446744073709551616', 'id', '18446744073709551616'];
+        yield '20 dígitos por encima del tope' => ['message', '99999999999999999999', 'id', '99999999999999999999'];
         yield 'decimal' => ['message', '9.5', 'id', null];
         yield 'uuid sin guiones' => ['message', '0b8f5d2e6c414a7e9f3d2a1b7c9e4d60', 'id', '0b8f5d2e6c414a7e9f3d2a1b7c9e4d60'];
         yield 'ulid con una U' => ['message', '01JA2B3C4D5E6F7G8H9J0K1M2U', 'id', '01JA2B3C4D5E6F7G8H9J0K1M2U'];

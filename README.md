@@ -346,7 +346,8 @@ declarar desde el controlador o desde un servicio, con o sin FormRequest.
 - **Tipo**: minúsculas, números y `_`, hasta 32, empezando con letra: `message`, `contact`,
   `tag`, `note`, `scheduled_message`, `webhook_subscription`.
 - **Id**: la clave interna del recurso, **nunca un dato de una persona**. Sólo tres formas:
-  un entero positivo (hasta 20 dígitos, sin ceros adelante), un UUID o un ULID. Se guarda el
+  un entero positivo (sin ceros adelante, hasta 18446744073709551615, el tope de un
+  `BIGINT UNSIGNED`), un UUID o un ULID. Se guarda el
   UUID en minúsculas y el ULID en mayúsculas. Cualquier otra cosa —un teléfono con `+`, un
   email, un texto, un `msg_…`, un `0`— se descarta. Un teléfono sin `+` no se distingue de un
   entero: pasá siempre la clave primaria del recurso (`$message->id`), nunca un campo suyo.

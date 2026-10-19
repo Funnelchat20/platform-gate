@@ -37,8 +37,11 @@ final readonly class CreatedResource
     /** `message`, `contact`, `tag`, `scheduled_message`… Minúsculas, hasta 32. */
     private const TYPE = '/^[a-z][a-z0-9_]{0,31}$/D';
 
-    /** Un entero positivo, como lo guarda un `BIGINT UNSIGNED`: hasta 20 dígitos, sin ceros adelante. */
+    /** Un entero positivo, sin ceros adelante, de hasta 20 dígitos; el tope es `MAX_INTEGER`. */
     private const POSITIVE_INTEGER = '/^[1-9][0-9]{0,19}$/D';
+
+    /** El más grande que entra en un `BIGINT UNSIGNED`. Más que eso no es una clave primaria. */
+    public const MAX_INTEGER = '18446744073709551615';
 
     /** Crockford base32, 26 caracteres; el primero no pasa de 7 (128 bits). */
     private const ULID = '/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/Di';
@@ -76,11 +79,17 @@ final readonly class CreatedResource
         }
 
         return match (true) {
-            preg_match(self::POSITIVE_INTEGER, $id) === 1 => $id,
+            preg_match(self::POSITIVE_INTEGER, $id) === 1 => self::fitsUnsignedBigint($id) ? $id : null,
             Str::isUuid($id) => strtolower($id),
             preg_match(self::ULID, $id) === 1 => strtoupper($id),
             default => null,
         };
+    }
+
+    /** Mismo largo, orden de texto = orden numérico: no hace falta `bcmath` ni `gmp`. */
+    private static function fitsUnsignedBigint(string $digits): bool
+    {
+        return strlen($digits) < strlen(self::MAX_INTEGER) || strcmp($digits, self::MAX_INTEGER) <= 0;
     }
 
     /** Lo declarado en el pedido en curso, o `null`. */
