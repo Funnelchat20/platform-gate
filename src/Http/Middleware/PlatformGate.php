@@ -22,6 +22,7 @@ use Funnelchat\PlatformGate\Usage\ApiCall;
 use Funnelchat\PlatformGate\Usage\ApiCallRecorder;
 use Funnelchat\PlatformGate\Usage\CreatedResource;
 use Funnelchat\PlatformGate\Usage\CreatedResourceContext;
+use Illuminate\Container\Container;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\Request;
@@ -44,6 +45,10 @@ final class PlatformGate
 
     private ?string $keyIdForLog = null;
 
+    private readonly RequestId $requestIds;
+
+    private readonly CreatedResourceContext $resources;
+
     public function __construct(
         private readonly CallerContext $context,
         private readonly RoutePermissions $routes,
@@ -56,14 +61,17 @@ final class PlatformGate
         /** @var callable(mixed):array{0:?int,1:bool} */
         private $accountResolver,
         private readonly EdgeTrust $edge,
-        // El singleton del contenedor: el mismo que usan `TrustEdge` y el 401 (0.8).
-        private readonly RequestId $requestIds,
-        // El del request en curso, el mismo en el que declara el controlador (0.8).
-        private readonly CreatedResourceContext $resources,
         private readonly bool $blockOnUnreadableKind = false,
         private readonly bool $requireEdge = false,
         private readonly string $publicUrl = 'https://api.funnelchat.com',
+        ?RequestId $requestIds = null,
+        ?CreatedResourceContext $resources = null,
     ) {
+        // Al final y opcionales (0.8): un `new PlatformGate(...)` armado como en 0.7.1 sigue
+        // andando. Sin pasarlos, salen del contenedor —el singleton de `RequestId`, el mismo de
+        // `TrustEdge` y el 401, y el contexto del request en curso—; nunca se construyen acá.
+        $this->requestIds = $requestIds ?? Container::getInstance()->make(RequestId::class);
+        $this->resources = $resources ?? Container::getInstance()->make(CreatedResourceContext::class);
     }
 
     public function handle(Request $request, Closure $next): Response

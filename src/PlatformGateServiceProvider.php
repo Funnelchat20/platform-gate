@@ -112,11 +112,11 @@ final class PlatformGateServiceProvider extends ServiceProvider
             $app->make(LoggerInterface::class),
             $this->accountResolver(),
             $app->make(EdgeTrust::class),
-            $app->make(RequestId::class),
-            $app->make(CreatedResourceContext::class),
             (bool) $app['config']->get('platform-gate.block_on_unreadable_kind', false),
             (bool) $app['config']->get('platform-gate.require_edge', false),
             (string) ($app['config']->get('platform-gate.public_url') ?: 'https://api.funnelchat.com'),
+            $app->make(RequestId::class),
+            $app->make(CreatedResourceContext::class),
         ));
     }
 

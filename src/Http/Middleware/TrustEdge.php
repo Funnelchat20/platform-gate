@@ -7,6 +7,7 @@ namespace Funnelchat\PlatformGate\Http\Middleware;
 use Closure;
 use Funnelchat\PlatformGate\Edge\EdgeTrust;
 use Funnelchat\PlatformGate\Http\RequestId;
+use Illuminate\Container\Container;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -31,10 +32,12 @@ use Symfony\Component\HttpFoundation\Response;
  */
 final class TrustEdge
 {
-    public function __construct(
-        private readonly EdgeTrust $edge,
-        private readonly RequestId $requestIds,
-    ) {
+    private readonly RequestId $requestIds;
+
+    /** `RequestId` opcional (0.8): `new TrustEdge($edge)`, como en 0.7.1, lo toma del contenedor. */
+    public function __construct(private readonly EdgeTrust $edge, ?RequestId $requestIds = null)
+    {
+        $this->requestIds = $requestIds ?? Container::getInstance()->make(RequestId::class);
     }
 
     public function handle(Request $request, Closure $next): Response

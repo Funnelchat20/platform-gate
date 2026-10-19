@@ -529,11 +529,11 @@ portero nuevo, la cabecera del borde se ignora; sin el borde nuevo, el portero g
 3. accounts, conversations y communities, en cualquier orden.
 4. El portal documenta `X-Request-Id`.
 
-**Código.** `PlatformGate` recibe dos dependencias nuevas, obligatorias y después de
-`EdgeTrust`: `RequestId` y `CreatedResourceContext`; los tres valores opcionales del final
-siguen al final. `TrustEdge` recibe `RequestId`. Si los arma el contenedor —lo normal—, no hay
-nada que hacer; si alguien construye `PlatformGate` a mano con argumentos por posición, tiene
-que sumarlas. `ApiCall` tiene tres campos más, opcionales.
+**Código.** `PlatformGate` y `TrustEdge` reciben dependencias nuevas —`RequestId`, y en el
+portero también `CreatedResourceContext`— **al final y opcionales**: un `new PlatformGate(...)`
+o un `new TrustEdge($edge)` armados como en 0.7.1 siguen andando, y lo que no se pasa sale del
+contenedor. Si los arma el contenedor —lo normal—, no hay nada que hacer. `ApiCall` tiene tres
+campos más, opcionales.
 
 ---
 
