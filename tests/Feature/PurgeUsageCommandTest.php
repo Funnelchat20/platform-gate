@@ -128,6 +128,50 @@ final class PurgeUsageCommandTest extends GateTestCase
         $this->assertSame(['2026-10-01 00:00:00', '2026-10-02 00:00:00'], $this->remaining());
     }
 
+    public function test_borra_por_rango_de_id_hasta_la_primera_fila_que_se_queda(): void
+    {
+        $this->insertAt('2026-05-01 00:00:00', '2026-05-02 00:00:00', '2026-10-01 00:00:00');
+
+        $deletes = [];
+        DB::listen(static function (QueryExecuted $query) use (&$deletes): void {
+            if (str_starts_with(strtolower($query->sql), 'delete')) {
+                $deletes[] = $query;
+            }
+        });
+
+        $this->artisan('platform-gate:purge-usage')->assertExitCode(0);
+
+        $this->assertCount(1, $deletes);
+        $this->assertStringContainsString('"id" < ?', $deletes[0]->sql);
+        $this->assertContains(3, $deletes[0]->bindings, 'el límite es el id de la primera fila que se queda');
+        $this->assertSame(['2026-10-01 00:00:00'], $this->remaining());
+    }
+
+    public function test_un_pedido_lento_no_se_lleva_filas_nuevas(): void
+    {
+        // `occurred_at` es cuándo EMPEZÓ el pedido; la fila se escribe al terminar. Un pedido
+        // lento que empezó antes del corte queda con un id mayor que uno nuevo y corto.
+        $this->insertAt(
+            '2026-05-01 00:00:00', // 1, viejo: se va
+            '2026-07-21 12:00:05', // 2, nuevo y corto: queda
+            '2026-07-21 11:59:50', // 3, viejo y lento: queda hasta la corrida siguiente
+            '2026-10-01 00:00:00', // 4, nuevo: queda
+        );
+
+        $this->artisan('platform-gate:purge-usage')->assertExitCode(0);
+
+        $this->assertSame(['2026-07-21 12:00:05', '2026-07-21 11:59:50', '2026-10-01 00:00:00'], $this->remaining());
+    }
+
+    public function test_si_todo_es_viejo_borra_todo(): void
+    {
+        $this->insertAt('2026-05-01 00:00:00', '2026-05-02 00:00:00');
+
+        $this->artisan('platform-gate:purge-usage')->assertExitCode(0);
+
+        $this->assertSame([], $this->remaining());
+    }
+
     public function test_al_log_va_solo_la_cantidad_y_el_corte(): void
     {
         $this->insertAt('2026-01-01 00:00:00', '2026-02-01 00:00:00', '2026-10-01 00:00:00');

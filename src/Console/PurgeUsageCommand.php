@@ -23,6 +23,22 @@ use Psr\Log\LoggerInterface;
  * En lotes, para no tener un DELETE gigante bloqueando la tabla en la que el portero escribe
  * en cada llamada. Borra lo ESTRICTAMENTE anterior al corte, y nada más.
  *
+ * Por rango de id, sin índice nuevo: la tabla es de sólo agregado y el id crece con el tiempo.
+ * No hay índice por `occurred_at` solo, así que filtrar por fecha recorre la clave primaria
+ * desde el principio, y el último lote —el que no encuentra nada— recorre la tabla entera.
+ * En cambio:
+ *
+ *   1. el límite es el PRIMER id con `occurred_at` en el corte o después. Se busca subiendo por
+ *      la clave primaria y se para en la primera coincidencia: lee sólo las filas viejas;
+ *   2. cada lote borra `id < límite` —un rango de la clave primaria— y además
+ *      `occurred_at < corte`.
+ *
+ * El filtro de fecha se queda porque el id no es exactamente monótono con `occurred_at`: es el
+ * momento en que EMPEZÓ el pedido, y la fila se escribe al terminarlo. Un pedido lento queda
+ * con un id mayor que el de uno más nuevo y corto. Sin el filtro, borrar hasta el último id
+ * viejo se llevaría filas nuevas; con el límite en el primer id nuevo, una fila vieja que quedó
+ * después de él espera a la corrida siguiente. Se equivoca hacia guardar, nunca hacia borrar.
+ *
  * Al log va la cantidad y el corte. Nada de las filas.
  */
 final class PurgeUsageCommand extends Command
@@ -53,12 +69,16 @@ final class PurgeUsageCommand extends Command
         $table = $db->connection(config('platform-gate.usage_connection'))
             ->table((string) config('platform-gate.usage_table', 'api_call_log'));
 
+        // `null`: no hay ninguna fila del corte en adelante, todo lo que hay es viejo.
+        $boundary = (clone $table)->where('occurred_at', '>=', $cutoff)->orderBy('id')->limit(1)->value('id');
+
         $deleted = 0;
 
         do {
             // `ORDER BY id`: un DELETE con LIMIT sin orden es no determinístico, y MySQL lo marca
             // como inseguro para la replicación por sentencia.
             $batch = (clone $table)
+                ->when($boundary !== null, static fn ($query) => $query->where('id', '<', $boundary))
                 ->where('occurred_at', '<', $cutoff)
                 ->orderBy('id')
                 ->limit(self::BATCH)

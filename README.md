@@ -338,6 +338,11 @@ defecto**. Borra lo estrictamente anterior al corte, y nada más.
 - **Falla cerrado.** Con N menor que 1, o algo que no es un entero (`90d`, `1.5`, vacío), no
   borra nada, lo deja como error en el log y termina con código 1.
 - Al log va sólo la cantidad borrada y el corte. Nada de las filas.
+- **Sin índice nuevo:** borra por rango de la clave primaria, hasta la primera fila que se
+  queda, sin dejar de filtrar por fecha. La fila se escribe cuando el pedido termina y
+  `occurred_at` es cuándo empezó, así que una fila vieja de un pedido lento que quedó detrás
+  de una nueva se borra en la corrida siguiente: la purga se equivoca hacia guardar, nunca
+  hacia borrar.
 - No se programa sola: el dominio la agrega a su schedule (ver «Instalación»).
 
 ---
