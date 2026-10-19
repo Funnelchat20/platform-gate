@@ -44,12 +44,13 @@ final class CreatedResourceTest extends GateTestCase
     /** @return iterable<string, array{string, int|string, string}> */
     public static function validDeclarations(): iterable
     {
-        yield 'id entero' => ['message', 981, '981'];
-        yield 'id como texto' => ['contact', '42', '42'];
+        yield 'entero' => ['message', 981, '981'];
+        yield 'entero como texto' => ['contact', '42', '42'];
+        yield 'el BIGINT UNSIGNED más grande' => ['message', '18446744073709551615', '18446744073709551615'];
         yield 'uuid' => ['scheduled_message', '0b8f5d2e-6c41-4a7e-9f3d-2a1b7c9e4d60', '0b8f5d2e-6c41-4a7e-9f3d-2a1b7c9e4d60'];
+        yield 'uuid en mayúsculas' => ['webhook_subscription', '0B8F5D2E-6C41-4A7E-9F3D-2A1B7C9E4D60', '0b8f5d2e-6c41-4a7e-9f3d-2a1b7c9e4d60'];
         yield 'ulid' => ['tag', '01JA2B3C4D5E6F7G8H9J0K1M2N', '01JA2B3C4D5E6F7G8H9J0K1M2N'];
-        yield 'con prefijo' => ['webhook_subscription', 'whs_9f2c4e1a', 'whs_9f2c4e1a'];
-        yield '64 de largo' => ['note', str_repeat('a', 64), str_repeat('a', 64)];
+        yield 'ulid en minúsculas' => ['note', '01ja2b3c4d5e6f7g8h9j0k1m2n', '01JA2B3C4D5E6F7G8H9J0K1M2N'];
     }
 
     #[DataProvider('validDeclarations')]
@@ -106,8 +107,19 @@ final class CreatedResourceTest extends GateTestCase
         yield 'un teléfono' => ['contact', '+5491122334455', 'id', '+5491122334455'];
         yield 'un email' => ['contact', 'ana@example.com', 'id', 'ana@example.com'];
         yield 'un texto' => ['note', 'llamar el lunes', 'id', 'llamar el lunes'];
+        yield 'una palabra' => ['note', 'urgente', 'id', 'urgente'];
+        yield 'con prefijo' => ['webhook_subscription', 'whs_9f2c4e1a', 'id', 'whs_9f2c4e1a'];
         yield 'vacío' => ['message', '', 'id', null];
-        yield 'id de 65' => ['message', str_repeat('a', 65), 'id', str_repeat('a', 65)];
+        yield 'cero' => ['message', 0, 'id', null];
+        yield 'negativo' => ['message', -5, 'id', null];
+        yield 'cero como texto' => ['message', '0', 'id', null];
+        yield 'negativo como texto' => ['message', '-5', 'id', null];
+        yield 'con ceros adelante' => ['message', '007', 'id', null];
+        yield 'entero de 21 dígitos' => ['message', '123456789012345678901', 'id', '123456789012345678901'];
+        yield 'decimal' => ['message', '9.5', 'id', null];
+        yield 'uuid sin guiones' => ['message', '0b8f5d2e6c414a7e9f3d2a1b7c9e4d60', 'id', '0b8f5d2e6c414a7e9f3d2a1b7c9e4d60'];
+        yield 'ulid con una U' => ['message', '01JA2B3C4D5E6F7G8H9J0K1M2U', 'id', '01JA2B3C4D5E6F7G8H9J0K1M2U'];
+        yield 'ulid de más de 128 bits' => ['message', '81JA2B3C4D5E6F7G8H9J0K1M2N', 'id', '81JA2B3C4D5E6F7G8H9J0K1M2N'];
         yield 'id con salto de línea' => ['message', "981\n", 'id', null];
     }
 

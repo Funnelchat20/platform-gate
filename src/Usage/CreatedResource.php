@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnelchat\PlatformGate\Usage;
 
 use Illuminate\Container\Container;
+use Illuminate\Support\Str;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
@@ -21,10 +22,11 @@ use Throwable;
  * Un recurso por llamada: si se declara dos veces, queda la última. Sin declaración, la fila
  * queda sin recurso, como en 0.7.
  *
- * Sigue sin PII ni contenido (D12): el id es un id INTERNO —un entero, un UUID, un
- * `msg_…`—, nunca un teléfono, un email ni un texto. Por eso el formato es estrecho: un `+`,
- * una `@` o un espacio no pasan. Un número de teléfono sin `+` no se distingue de un id
- * entero: eso lo cuida quien declara.
+ * Sigue sin PII ni contenido (D12): el id es la clave interna del recurso, nunca un dato de
+ * una persona. Sólo tres formas, las de una clave primaria: un entero positivo, un UUID o un
+ * ULID. Cualquier otra cosa —un teléfono con `+`, un email, un texto, un `msg_…`, un `0`— se
+ * descarta. Un teléfono sin `+` no se distingue de un entero: eso lo cuida quien declara,
+ * pasando la clave del recurso y no un campo suyo.
  *
  * Una declaración inválida NO rompe la llamada: cuando el controlador declara, el recurso ya
  * existe, y un 500 ahí haría que el cliente reintente y lo cree dos veces. No se guarda,
@@ -35,8 +37,11 @@ final readonly class CreatedResource
     /** `message`, `contact`, `tag`, `scheduled_message`… Minúsculas, hasta 32. */
     private const TYPE = '/^[a-z][a-z0-9_]{0,31}$/D';
 
-    /** Enteros, UUID, ULID, `msg_…`. Hasta 64. */
-    private const ID = '/^[A-Za-z0-9_-]{1,64}$/D';
+    /** Un entero positivo, como lo guarda un `BIGINT UNSIGNED`: hasta 20 dígitos, sin ceros adelante. */
+    private const POSITIVE_INTEGER = '/^[1-9][0-9]{0,19}$/D';
+
+    /** Crockford base32, 26 caracteres; el primero no pasa de 7 (128 bits). */
+    private const ULID = '/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/Di';
 
     private function __construct(
         public string $type,
@@ -46,21 +51,36 @@ final readonly class CreatedResource
 
     public static function declare(string $type, int|string $id): void
     {
-        $id = (string) $id;
+        if (preg_match(self::TYPE, $type) !== 1) {
+            self::warn('type', null);
 
-        $invalid = match (true) {
-            preg_match(self::TYPE, $type) !== 1 => 'type',
-            preg_match(self::ID, $id) !== 1 => 'id',
-            default => null,
-        };
+            return;
+        }
 
-        if ($invalid !== null) {
-            self::warn($invalid, $invalid === 'id' ? $type : null);
+        $id = self::normalizeId($id);
+
+        if ($id === null) {
+            self::warn('id', $type);
 
             return;
         }
 
         Container::getInstance()->make(CreatedResourceContext::class)->set(new self($type, $id));
+    }
+
+    /** El id como se guarda —UUID en minúsculas, ULID en mayúsculas—, o `null` si no es ninguna de las tres formas. */
+    private static function normalizeId(int|string $id): ?string
+    {
+        if (is_int($id)) {
+            return $id > 0 ? (string) $id : null;
+        }
+
+        return match (true) {
+            preg_match(self::POSITIVE_INTEGER, $id) === 1 => $id,
+            Str::isUuid($id) => strtolower($id),
+            preg_match(self::ULID, $id) === 1 => strtoupper($id),
+            default => null,
+        };
     }
 
     /** Lo declarado en el pedido en curso, o `null`. */
@@ -74,8 +94,8 @@ final readonly class CreatedResource
         try {
             Container::getInstance()->make(LoggerInterface::class)->warning(
                 'platform-gate: declaración de recurso inválida, la fila queda sin recurso. '
-                .'El tipo va en minúsculas (`message`, `scheduled_message`) y el id es un id interno: '
-                .'letras, números, `_` y `-`, hasta 64.',
+                .'El tipo va en minúsculas (`message`, `scheduled_message`) y el id es la clave '
+                .'interna del recurso: un entero positivo, un UUID o un ULID.',
                 ['invalid' => $invalid, 'type' => $type],
             );
         } catch (Throwable) {

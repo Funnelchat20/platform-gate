@@ -258,7 +258,7 @@ porque con seis el registro no servía para rastrear un problema (ver «Actualiz
 | `method`, `status_code`, `duration_ms` | Lo que dicen. |
 | `occurred_at` | Cuándo empezó, en UTC. |
 | `request_id` | El id del pedido: el mismo que el cliente recibe en `X-Request-Id`. Con índice. |
-| `resource_type`, `resource_id` | Lo que la llamada creó, si el controlador lo declaró. Si no, `null`. |
+| `resource_type`, `resource_id` | Lo que la llamada creó, si el controlador lo declaró: el tipo y la clave interna del recurso (un entero positivo, un UUID o un ULID). Si no, `null`. |
 
 Sin PII y sin contenido: ni teléfonos, ni cuerpos, ni texto escrito por personas. El
 `resource_id` es un id **interno**. Una fila nunca se actualiza; lo único que la borra es la
@@ -328,9 +328,11 @@ declarar desde el controlador o desde un servicio, con o sin FormRequest.
 
 - **Tipo**: minúsculas, números y `_`, hasta 32, empezando con letra: `message`, `contact`,
   `tag`, `note`, `scheduled_message`, `webhook_subscription`.
-- **Id**: un entero o un texto de letras, números, `_` y `-`, hasta 64: un id autoincremental,
-  un UUID, un ULID, un `msg_…`. Un `+`, una `@` o un espacio no pasan. Un teléfono sin `+` no
-  se distingue de un id entero: eso lo cuida quien declara.
+- **Id**: la clave interna del recurso, **nunca un dato de una persona**. Sólo tres formas:
+  un entero positivo (hasta 20 dígitos, sin ceros adelante), un UUID o un ULID. Se guarda el
+  UUID en minúsculas y el ULID en mayúsculas. Cualquier otra cosa —un teléfono con `+`, un
+  email, un texto, un `msg_…`, un `0`— se descarta. Un teléfono sin `+` no se distingue de un
+  entero: pasá siempre la clave primaria del recurso (`$message->id`), nunca un campo suyo.
 - **Un recurso por llamada.** Si se declara dos veces, queda la última válida. El portero
   vacía la declaración al empezar y al terminar cada pedido: no queda pegada al siguiente.
 - **Una declaración inválida no rompe la llamada.** Cuando el controlador declara, el recurso
