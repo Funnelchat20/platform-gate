@@ -358,6 +358,9 @@ defecto**. Borra lo estrictamente anterior al corte, y nada más.
   `occurred_at` es cuándo empezó, así que una fila vieja de un pedido lento que quedó detrás
   de una nueva se borra en la corrida siguiente: la purga se equivoca hacia guardar, nunca
   hacia borrar.
+- **Una fila con fecha futura no la traba.** Las de más de un día en el futuro (reloj
+  adelantado, dato roto) no cuentan para el límite y no se borran; si hay alguna antes del
+  límite, queda un warning con cuántas.
 - No se programa sola: el dominio la agrega a su schedule (ver «Instalación»).
 
 ---

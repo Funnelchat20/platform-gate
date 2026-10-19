@@ -39,6 +39,12 @@ use Psr\Log\LoggerInterface;
  * viejo se llevaría filas nuevas; con el límite en el primer id nuevo, una fila vieja que quedó
  * después de él espera a la corrida siguiente. Se equivoca hacia guardar, nunca hacia borrar.
  *
+ * Una fila con fecha futura —un reloj adelantado, un dato roto— no cuenta como límite: si no,
+ * una sola fila con `occurred_at` en 2099 entre las viejas trabaría la purga para siempre, porque
+ * nunca llega a ser vieja. Para el límite se ignoran las de más de un día en el futuro; no se
+ * borran (no son anteriores al corte) y quedan en un warning con cuántas había antes del límite.
+ * Las que están más adelante no se cuentan: contarlas sería recorrer la tabla entera.
+ *
  * Al log va la cantidad y el corte. Nada de las filas.
  */
 final class PurgeUsageCommand extends Command
@@ -64,13 +70,36 @@ final class PurgeUsageCommand extends Command
         }
 
         // `occurred_at` se guarda en UTC (`gmdate`), así que el corte también.
-        $cutoff = Carbon::now('UTC')->subDays($days)->format('Y-m-d H:i:s');
+        $now = Carbon::now('UTC');
+        $cutoff = $now->copy()->subDays($days)->format('Y-m-d H:i:s');
+
+        // Más allá de esto, la fecha no es creíble: no puede hacer de límite.
+        $future = $now->copy()->addDay()->format('Y-m-d H:i:s');
 
         $table = $db->connection(config('platform-gate.usage_connection'))
             ->table((string) config('platform-gate.usage_table', 'api_call_log'));
 
-        // `null`: no hay ninguna fila del corte en adelante, todo lo que hay es viejo.
-        $boundary = (clone $table)->where('occurred_at', '>=', $cutoff)->orderBy('id')->limit(1)->value('id');
+        // `null`: no hay ninguna fila creíble del corte en adelante, todo lo que hay es viejo.
+        $boundary = (clone $table)
+            ->where('occurred_at', '>=', $cutoff)
+            ->where('occurred_at', '<=', $future)
+            ->orderBy('id')
+            ->limit(1)
+            ->value('id');
+
+        // Las que se saltearon para llegar al límite: un rango de la clave primaria, no la tabla.
+        $skipped = (clone $table)
+            ->when($boundary !== null, static fn ($query) => $query->where('id', '<', $boundary))
+            ->where('occurred_at', '>', $future)
+            ->count();
+
+        if ($skipped > 0) {
+            $logger->warning(
+                'platform-gate: hay filas del registro de uso con fecha de más de un día en el futuro (reloj '
+                .'adelantado o dato roto). No se borran ni frenan la purga; revisalas.',
+                ['future_rows' => $skipped, 'after' => $future],
+            );
+        }
 
         $deleted = 0;
 

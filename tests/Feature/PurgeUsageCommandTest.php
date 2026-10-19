@@ -163,6 +163,48 @@ final class PurgeUsageCommandTest extends GateTestCase
         $this->assertSame(['2026-07-21 12:00:05', '2026-07-21 11:59:50', '2026-10-01 00:00:00'], $this->remaining());
     }
 
+    public function test_una_fila_con_fecha_futura_no_traba_la_purga(): void
+    {
+        $this->insertAt(
+            '2026-05-01 00:00:00', // 1, viejo: se va
+            '2099-01-01 00:00:00', // 2, futuro: queda, y no hace de límite
+            '2026-05-02 00:00:00', // 3, viejo: se va
+            '2026-10-20 11:00:00', // 4, dentro del día de tolerancia: es el límite
+            '2026-10-01 00:00:00', // 5, nuevo: queda
+        );
+
+        $this->artisan('platform-gate:purge-usage')->assertExitCode(0);
+
+        $this->assertSame(['2099-01-01 00:00:00', '2026-10-20 11:00:00', '2026-10-01 00:00:00'], $this->remaining());
+
+        $this->assertSame([
+            'level' => 'warning',
+            'message' => $this->logged[0]['message'],
+            'context' => ['future_rows' => 1, 'after' => '2026-10-20 12:00:00'],
+        ], $this->logged[0]);
+        $this->assertStringContainsString('fecha de más de un día en el futuro', $this->logged[0]['message']);
+        $this->assertSame(['deleted' => 2, 'cutoff' => self::CUTOFF_90], $this->logged[1]['context']);
+    }
+
+    public function test_con_solo_filas_viejas_y_futuras_borra_las_viejas(): void
+    {
+        $this->insertAt('2026-05-01 00:00:00', '2099-01-01 00:00:00', '2026-05-02 00:00:00');
+
+        $this->artisan('platform-gate:purge-usage')->assertExitCode(0);
+
+        $this->assertSame(['2099-01-01 00:00:00'], $this->remaining());
+        $this->assertSame(['future_rows' => 1, 'after' => '2026-10-20 12:00:00'], $this->logged[0]['context']);
+    }
+
+    public function test_sin_filas_futuras_no_hay_warning(): void
+    {
+        $this->insertAt('2026-05-01 00:00:00', '2026-10-01 00:00:00');
+
+        $this->artisan('platform-gate:purge-usage')->assertExitCode(0);
+
+        $this->assertSame(['info'], array_column($this->logged, 'level'));
+    }
+
     public function test_si_todo_es_viejo_borra_todo(): void
     {
         $this->insertAt('2026-05-01 00:00:00', '2026-05-02 00:00:00');
