@@ -317,6 +317,23 @@ final class RequestIdTest extends GateTestCase
         $this->assertSame(['service' => 'communities'], (fn () => $this->context)->call($channel));
     }
 
+    public function test_un_request_id_que_puso_el_dominio_no_se_toca_al_terminar(): void
+    {
+        $log = $this->app->make('log');
+        $this->rebindLogger($log);
+        $channel = $log->channel();
+
+        // El dominio pisa `request_id` con el suyo durante el pedido.
+        $this->gateCall('GET', 'api/v1/groups', $this->key(), [], static function () use ($log) {
+            $log->shareContext(['request_id' => 'id-del-dominio']);
+
+            return new Response('ok');
+        });
+
+        $this->assertSame('id-del-dominio', $log->sharedContext()['request_id'] ?? null);
+        $this->assertSame('id-del-dominio', (fn () => $this->context)->call($channel)['request_id'] ?? null);
+    }
+
     public function test_al_terminar_un_pedido_que_no_es_de_key_tambien_sale_del_log(): void
     {
         $log = $this->app->make('log');

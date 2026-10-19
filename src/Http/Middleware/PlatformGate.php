@@ -115,7 +115,7 @@ final class PlatformGate
             $this->recordCall($request, $response, $resource);
         } finally {
             // Después de registrar: un warning del registro también lleva el id.
-            $this->requestIds->forgetFromLog();
+            $this->requestIds->forgetFromLog($request);
         }
     }
 

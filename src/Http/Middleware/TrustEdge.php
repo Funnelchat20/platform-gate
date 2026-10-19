@@ -51,6 +51,6 @@ final class TrustEdge
     /** El pedido terminó: `request_id` sale del log. */
     public function terminate(Request $request, Response $response): void
     {
-        $this->requestIds->forgetFromLog();
+        $this->requestIds->forgetFromLog($request);
     }
 }

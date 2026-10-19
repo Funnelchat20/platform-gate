@@ -81,6 +81,11 @@ use Illuminate\Http\Request;
 `PlatformGate` tiene que correr **después** de `auth:sanctum` —necesita el token resuelto— y
 **antes** de cualquier cosa de la aplicación que pregunte quién llama.
 
+**`PlatformGate` va como middleware de ruta** —en el grupo `api`, como arriba—, **nunca
+global**. Lo global es `TrustEdge`. El portero necesita la ruta resuelta para saber qué permiso
+pide; y en `terminate` Laravel corre primero los middleware de ruta y después los globales, así
+que el portero escribe la fila y saca `request_id` del log antes de que `TrustEdge` termine.
+
 Requiere PHP ^8.2, Laravel ^11.9 o ^12.0, y Sanctum ^4.0.
 
 **Lo probado es Laravel 12.** La suite pasa con las versiones más bajas que Composer deja
@@ -298,7 +303,8 @@ con el que soporte encuentra la fila y los logs.
   principio del pedido; si no, desde que corre el portero. Al terminar el pedido (el
   `terminate` del portero y de `TrustEdge`) se saca, y el resto del contexto del dominio queda
   como estaba: no depende de cómo maneje el proceso el estado entre pedidos. Lo que el dominio
-  loguee en su propio `terminate` después del portero ya no lo lleva.
+  loguee en su propio `terminate` después del portero ya no lo lleva. Sólo se saca si el valor
+  es el que puso el portero: si el dominio lo pisó con un `request_id` suyo, ése queda.
 
 Desde el dominio, para un job que encola o un log propio:
 
