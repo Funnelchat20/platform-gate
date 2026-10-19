@@ -475,7 +475,9 @@ primero «Actualizar desde 0.6»; las dos guías se pueden hacer en el mismo dep
    por defecto, la migración ya la toma de `PLATFORM_GATE_USAGE_CONNECTION`. En una tabla
    grande —conversations y communities nunca purgaron— el índice tarda: contá las filas antes.
    Mientras la migración no corrió, la fila se escribe igual, como en 0.7, y el log avisa
-   `Corré la migración de 0.8` en cada llamada.
+   `Corré la migración de 0.8` una vez por proceso. Bajo PHP-FPM un proceso atiende un
+   pedido: ahí es una vez por llamada, mientras dure la ventana entre el deploy y el
+   `migrate`. Cualquier otra falla al escribir la fila se loguea como en 0.7, sin reintento.
 3. **Declarar los recursos.** En cada ruta de `allowed` que crea algo, el controlador declara
    tipo e id; las que no crean nada, no:
 

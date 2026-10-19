@@ -22,23 +22,48 @@ use Throwable;
  * —el `terminate` del middleware— así que romperla no la desharía: sólo le mentiría al
  * cliente sobre algo que sí pasó. Se loguea y se sigue. Lo que se pierde es medición, y
  * eso se ve en el log.
+ *
+ * Singleton: que a la tabla le falta la migración de 0.8 se descubre una vez por proceso, como
+ * en `KindColumnProbe`, y desde ahí se escribe directo la fila de 0.7. Bajo PHP-FPM un proceso
+ * atiende un pedido, así que ahí es una vez por llamada mientras dure la ventana entre el
+ * deploy y el `migrate`.
  */
-final readonly class ApiCallRecorder
+final class ApiCallRecorder
 {
+    /** Ya se vio que faltan las columnas de 0.8: no se vuelve a intentar con ellas. */
+    private bool $withoutNewColumns = false;
+
     public function __construct(
-        private ConnectionInterface $connection,
-        private string $table,
-        private LoggerInterface $logger,
+        private readonly ConnectionInterface $connection,
+        private readonly string $table,
+        private readonly LoggerInterface $logger,
     ) {
     }
 
     public function record(ApiCall $call): void
     {
+        if ($this->withoutNewColumns) {
+            $this->insertWithoutNewColumns($call);
+
+            return;
+        }
+
         try {
             $this->connection->table($this->table)->insert($call->toRow());
         } catch (Throwable $e) {
             if (self::isMissingColumn($e)) {
-                $this->recordWithoutNewColumns($call);
+                $this->withoutNewColumns = true;
+
+                // Una vez por proceso, y antes de reintentar: lo que falta es la migración,
+                // salga o no la fila.
+                $this->logger->warning(
+                    'platform-gate: a la tabla de uso le faltan las columnas de 0.8: las llamadas se '
+                    .'registran sin `request_id` ni recurso. Corré la migración de 0.8 '
+                    .'(`php artisan migrate`) en la conexión de uso.',
+                    ['table' => $this->table],
+                );
+
+                $this->insertWithoutNewColumns($call);
 
                 return;
             }
@@ -49,25 +74,16 @@ final readonly class ApiCallRecorder
 
     /**
      * Un dominio que subió a 0.8 y todavía no corrió la migración nueva no tiene las tres
-     * columnas: la fila se escribe como en 0.7, sin id de pedido ni recurso, y el log dice qué
-     * falta.
+     * columnas: la fila se escribe como en 0.7, sin id de pedido ni recurso.
      */
-    private function recordWithoutNewColumns(ApiCall $call): void
+    private function insertWithoutNewColumns(ApiCall $call): void
     {
         try {
             $this->connection->table($this->table)
                 ->insert(array_diff_key($call->toRow(), array_flip(ApiCall::ADDED_IN_0_8)));
         } catch (Throwable $e) {
             $this->couldNotRecord($call, $e);
-
-            return;
         }
-
-        $this->logger->warning(
-            'platform-gate: la llamada se registró sin `request_id` ni recurso. Corré la migración '
-            .'de 0.8 (`php artisan migrate`) en la conexión de uso.',
-            ['route' => $call->route, 'method' => $call->method],
-        );
     }
 
     /** El camino de 0.7: se loguea y se sigue. */

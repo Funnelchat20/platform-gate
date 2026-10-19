@@ -98,6 +98,41 @@ final class ApiCallRecorderTest extends TestCase
         $this->assertStringContainsString('Corré la migración', $this->logged[0][1]);
     }
 
+    public function test_la_falta_de_columnas_se_descubre_una_vez_por_proceso(): void
+    {
+        $missing = self::queryException(['42S22', 1054, "Unknown column 'request_id' in 'field list'"]);
+
+        $recorder = $this->recorder(static function (array $row) use ($missing): void {
+            if (array_key_exists('request_id', $row)) {
+                throw $missing;
+            }
+        });
+
+        $recorder->record($this->call());
+        $recorder->record($this->call());
+        $recorder->record($this->call());
+
+        // Un INSERT con las columnas nuevas, y después sólo los de 0.7.
+        $this->assertSame([true, false, false, false], array_map(static fn (array $row) => array_key_exists('request_id', $row), $this->inserts));
+        $this->assertCount(1, $this->logged, 'un solo warning');
+    }
+
+    public function test_otra_falla_no_hace_que_se_deje_de_intentar_con_las_columnas(): void
+    {
+        $failures = [self::queryException(['40001', 1213, 'Deadlock found'])];
+
+        $recorder = $this->recorder(static function () use (&$failures): void {
+            if ($failures !== []) {
+                throw array_shift($failures);
+            }
+        });
+
+        $recorder->record($this->call());
+        $recorder->record($this->call());
+
+        $this->assertSame([true, true], array_map(static fn (array $row) => array_key_exists('request_id', $row), $this->inserts));
+    }
+
     /** @return iterable<string, array{Throwable}> */
     public static function otherFailures(): iterable
     {
@@ -120,7 +155,7 @@ final class ApiCallRecorderTest extends TestCase
         $this->assertSame([['warning', 'platform-gate: no se pudo registrar la llamada']], $this->logged);
     }
 
-    public function test_si_la_fila_de_0_7_tambien_falla_se_loguea_como_en_0_7(): void
+    public function test_si_la_fila_de_0_7_tambien_falla_se_dicen_las_dos_cosas(): void
     {
         $missing = self::queryException(['42S22', 1054, "Unknown column 'request_id'"]);
         $down = self::queryException(['HY000', 2002, 'Connection refused']);
@@ -131,7 +166,10 @@ final class ApiCallRecorderTest extends TestCase
 
         $recorder->record($this->call());
 
+        // Lo que falta (la migración) y lo que pasó (la fila no salió): los dos.
         $this->assertCount(2, $this->inserts);
-        $this->assertSame([['warning', 'platform-gate: no se pudo registrar la llamada']], $this->logged);
+        $this->assertCount(2, $this->logged);
+        $this->assertStringContainsString('Corré la migración', $this->logged[0][1]);
+        $this->assertSame(['warning', 'platform-gate: no se pudo registrar la llamada'], $this->logged[1]);
     }
 }
