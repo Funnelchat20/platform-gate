@@ -17,7 +17,8 @@ Cuatro preguntas en cada request: **¿quién sos?**, **¿podés?**, **¿te pasas
 | Clasifica al llamador: `api_key`, `web` o `unverified` | Frenos de envío — ritmo, plantillas, ventanas, opt-out |
 | Chequea el permiso que pide la ruta | Idempotencia |
 | Aplica el tope diario de **llamadas** por key | Autorización por cuenta (que el recurso sea de quien llama) |
-| Escribe una fila por llamada | Emitir, validar o revocar keys |
+| Escribe una fila por llamada, con su id de pedido y lo que creó, y la purga a los 90 días | Emitir, validar o revocar keys |
+| Devuelve `X-Request-Id` en cada respuesta | Leer el registro: se consulta por SQL |
 | Reconoce lo que llega por el borde (`api.funnelchat.com`) y le cree host e IP | Rutear entre dominios — eso es el Worker |
 
 Los frenos de envío viven en la costura de salida de cada aplicación, no acá y no en la
@@ -33,6 +34,15 @@ no puede saber si dos llamadas produjeron el mismo efecto.
 composer require funnelchat20/platform-gate
 php artisan vendor:publish --tag=platform-gate-config
 php artisan migrate            # crea `api_call_log`
+```
+
+Y la purga del registro, todos los días (ver «El registro de llamadas»):
+
+```php
+// routes/console.php
+use Illuminate\Support\Facades\Schedule;
+
+Schedule::command('platform-gate:purge-usage')->daily();
 ```
 
 El middleware va sobre el grupo de rutas de API que ya existe. **No crea rutas nuevas.**
@@ -220,7 +230,108 @@ $failClosed = match ($caller->kind) {
 produce efectos externos tiene que poder saber que lo originó una key.
 
 **Nada de esto se expone al cliente.** Ni el `kind`, ni el `key_id`, ni ningún
-identificador de cuenta — ni en respuestas, ni en headers, ni en webhooks.
+identificador de cuenta — ni en respuestas, ni en headers, ni en webhooks. Lo único que el
+portero le agrega a la respuesta es `X-Request-Id`, un id al azar del pedido.
+
+---
+
+## El registro de llamadas
+
+Cada llamada de key deja una fila en `api_call_log` (`PLATFORM_GATE_USAGE_TABLE`), en la
+conexión `PLATFORM_GATE_USAGE_CONNECTION`. También las rechazadas: alguien golpeando una ruta
+que no puede usar es una pregunta de producto. Nadie la lee desde el código; se consulta por
+SQL.
+
+**Nueve campos y ni uno más (D12).** Hasta 0.7 eran seis; el 17-10-2026 se sumaron tres,
+porque con seis el registro no servía para rastrear un problema (ver «Actualizar desde 0.7»):
+
+| Columna | Qué es |
+|---|---|
+| `key_id` | `key_` + HMAC del id del token. Nunca el token. |
+| `route` | El URI **definido** (`contacts/{contact}/messages`), no el path real: así ningún id de persona entra por ahí. |
+| `method`, `status_code`, `duration_ms` | Lo que dicen. |
+| `occurred_at` | Cuándo empezó, en UTC. |
+| `request_id` | El id del pedido: el mismo que el cliente recibe en `X-Request-Id`. Con índice. |
+| `resource_type`, `resource_id` | Lo que la llamada creó, si el controlador lo declaró. Si no, `null`. |
+
+Sin PII y sin contenido: ni teléfonos, ni cuerpos, ni texto escrito por personas. El
+`resource_id` es un id **interno**. Una fila nunca se actualiza; lo único que la borra es la
+purga.
+
+### El id del pedido: `X-Request-Id`
+
+Cada respuesta que pasa por `TrustEdge` o por el portero trae `X-Request-Id`: las que
+contesta el dominio, un 500, y los rechazos del propio portero (403, 429, 503). El 401 de
+`UnauthenticatedResponse` también. Es el id que el integrador cita al reportar un problema, y
+con el que soporte encuentra la fila y los logs.
+
+- **Si el pedido viene del borde** —con el secreto válido— y trae `X-Funnelchat-Request-Id`
+  con un UUID, se usa ése: el cliente ve el mismo id de punta a punta.
+- **Si no**, el portero genera un UUID v4. Un `X-Funnelchat-Request-Id` que llega sin el
+  secreto lo pudo mandar cualquiera, y no se le cree; uno del borde que no es un UUID se
+  descarta y queda un warning en el log, sin el valor.
+- **El del portero gana.** Si el dominio pone su propio `X-Request-Id` en la respuesta, se
+  reemplaza: si no, el cliente citaría un id que no está en ninguna fila.
+- **Va al log.** Se suma como `request_id` al contexto compartido del log del dominio
+  (`Log::shareContext()`) en cuanto se decide: si `TrustEdge` está montado, desde el
+  principio del pedido; si no, desde que corre el portero.
+
+Desde el dominio, para un job que encola o un log propio:
+
+```php
+use Funnelchat\PlatformGate\Http\RequestId;
+
+$id = app(RequestId::class)->for($request);   // decide si hace falta; siempre el mismo
+$id = RequestId::of($request);                // el ya decidido, o null
+```
+
+### Lo que creó la llamada: `CreatedResource`
+
+El controlador declara el recurso que creó —un tipo corto y su id— y el portero lo guarda en
+la fila al terminar el pedido:
+
+```php
+use Funnelchat\PlatformGate\Usage\CreatedResource;
+
+public function store(StoreMessageRequest $request): JsonResponse
+{
+    $message = $this->messages->send($request->validated());
+
+    CreatedResource::declare($request, 'message', $message->id);
+
+    return response()->json(new MessageResource($message), 201);
+}
+```
+
+```php
+CreatedResource::declare(Request $request, string $type, int|string $id): void
+```
+
+- **Tipo**: minúsculas, números y `_`, hasta 32, empezando con letra: `message`, `contact`,
+  `tag`, `note`, `scheduled_message`, `webhook_subscription`.
+- **Id**: un entero o un texto de letras, números, `_` y `-`, hasta 64: un id autoincremental,
+  un UUID, un ULID, un `msg_…`. Un `+`, una `@` o un espacio no pasan. Un teléfono sin `+` no
+  se distingue de un id entero: eso lo cuida quien declara.
+- **Un recurso por llamada.** Si se declara dos veces, queda la última válida.
+- **Una declaración inválida no rompe la llamada.** Cuando el controlador declara, el recurso
+  ya existe: un 500 ahí haría que el cliente reintente y lo cree dos veces. No se guarda, queda
+  un warning en el log —sin el valor— y la fila sale sin recurso. Un test del dominio que
+  mire la fila lo encuentra.
+- **Sin declaración**, la fila sale sin recurso, como en 0.7. Las rutas que no crean nada no
+  declaran.
+- Sólo cuenta en las llamadas de key: el front no deja fila. Un rechazo del portero no llega al
+  controlador, así que sale sin recurso.
+
+### La purga: `platform-gate:purge-usage`
+
+Borra las filas con `occurred_at` anterior a N días, en lotes de 1000. N es
+`PLATFORM_GATE_USAGE_RETENTION_DAYS` (`platform-gate.usage_retention_days`), **90 por
+defecto**. Borra lo estrictamente anterior al corte, y nada más.
+
+- **Falla cerrado.** Con N menor que 1, o algo que no es un entero (`90d`, `1.5`, vacío), no
+  borra nada, lo deja como error en el log y termina con código 1.
+- Al log va sólo la cantidad borrada y el corte. Nada de las filas.
+- No se programa sola: el dominio la agrega a su schedule (ver «Instalación»).
 
 ---
 
@@ -297,6 +408,8 @@ host interno y la IP del Worker.
 | Se pasó del tope diario | 429 + `Retry-After` | `daily_cap_exceeded` | Terminal por hoy |
 | **No se pudo evaluar** | 503 + `Retry-After` | `gate_unavailable` | **Reintentable** |
 
+Todas llevan `X-Request-Id` (0.8).
+
 "No se pudo evaluar" incluye: el store del contador no responde, `kind` no se puede leer o
 tiene un valor desconocido, la lista de permisos de la key no se puede leer,
 `permission_prefix` no se puede leer o le da dos prefijos a la misma ruta, y la exigencia
@@ -309,6 +422,79 @@ La última es la que importa: si el store se cae, **corta, no deja pasar**. Deja
 cuando no se puede evaluar es el agujero clásico — el cliente automatizado se pasa del
 límite justo cuando el control no responde. Y "no pude evaluar" nunca se colapsa con
 "evalué y está denegado": son dos respuestas para el cliente y dos métricas para vos.
+
+---
+
+## Actualizar desde 0.7
+
+Versión **0.8.0**. Una migración nueva y dos cosas para hacer en el dominio. Sin hacerlas, el
+dominio sigue funcionando igual: las filas salen sin recurso y nadie las purga.
+
+**Por qué.** El 09-10 el CEO marcó que el registro de llamadas no servía para rastrear un
+problema: no ligaba la llamada con lo que creó, no tenía un id que el integrador pudiera citar,
+y en conversations y communities no se purgaba nunca —sólo accounts tenía su
+`api-usage:purge`, a 90 días—. El 17-10 se decidió hacer las tres cosas, con 90 días de
+retención en todos los dominios y el id devuelto en la respuesta. Contrato
+`1019-registro-llamadas` v0, sección L1, iniciativa api-abierta. Con eso cambia D12: el
+registro pasa de seis campos a nueve, y deja de ser "sin purga". Sigue sin PII ni contenido.
+
+**Qué cambia:**
+
+- **`X-Request-Id` en cada respuesta** que pasa por `TrustEdge` o el portero, también en sus
+  rechazos y en el 401 de `UnauthenticatedResponse`. Si el dominio ya ponía un `X-Request-Id`
+  propio, desde ahora sale el del portero. El id va a la fila y al contexto del log
+  (`request_id`). Ver «El id del pedido».
+- **`TrustEdge` agrega `X-Request-Id` a todas las respuestas del dominio**, no sólo a las de
+  `api/*`: es global.
+- **`CreatedResource::declare()`**, para que el controlador diga qué creó la llamada.
+- **Migración nueva** (`2026_10_19_000001`): `request_id`, `resource_type` y `resource_id` en
+  `api_call_log`, las tres nullable, y un índice por `request_id`. La de 0.7 no cambia. Las
+  filas viejas quedan como están, con las tres en `null`.
+- **`platform-gate:purge-usage`** y `PLATFORM_GATE_USAGE_RETENTION_DAYS` (90).
+- El paquete pide `illuminate/console`. Un dominio con `laravel/framework` ya lo tiene.
+
+**Cómo subir, en cada dominio.** Si venís de 0.6 (accounts y communities fijan `0.6.0`),
+primero «Actualizar desde 0.6»; las dos guías se pueden hacer en el mismo deploy.
+
+1. **La versión.** `composer require funnelchat20/platform-gate:^0.8`. Con `^0.7` no alcanza:
+   en `0.x`, la menor es la que rompe.
+2. **La migración**, en la conexión de uso de ese dominio (accounts `mysql`, conversations
+   `mysql`, communities `groups`): `php artisan migrate`. Si la conexión de uso no es la de
+   por defecto, la migración ya la toma de `PLATFORM_GATE_USAGE_CONNECTION`. En una tabla
+   grande —conversations y communities nunca purgaron— el índice tarda: contá las filas antes.
+   Mientras la migración no corrió, la fila se escribe igual, como en 0.7, y el log avisa
+   `Corré la migración de 0.8` en cada llamada.
+3. **Declarar los recursos.** En cada ruta de `allowed` que crea algo, el controlador declara
+   tipo e id; las que no crean nada, no:
+
+   ```php
+   CreatedResource::declare($request, 'message', $message->id);
+   ```
+
+   El camino encolado también: si la respuesta devuelve un id antes de que el job corra, ése
+   es el que se declara.
+4. **Programar la purga**, todos los días:
+
+   ```php
+   Schedule::command('platform-gate:purge-usage')->daily();
+   ```
+
+   accounts no: sigue con su `api-usage:purge`, que hace lo mismo sobre la misma tabla.
+   La primera corrida en conversations y communities borra todo lo anterior a 90 días.
+5. **Tests del dominio**: una llamada de creación con key deja la fila con su `request_id` y
+   su recurso; la respuesta trae `X-Request-Id`; la purga está en el schedule.
+
+**Orden.** El portero lee el id que pone la entrada, así que cualquier orden es seguro: sin el
+portero nuevo, la cabecera del borde se ignora; sin el borde nuevo, el portero genera el id.
+
+1. platform-gate 0.8.0.
+2. api-edge (manda `X-Funnelchat-Request-Id` y devuelve el `X-Request-Id` del dominio).
+3. accounts, conversations y communities, en cualquier orden.
+4. El portal documenta `X-Request-Id`.
+
+**Código.** `PlatformGate` y `TrustEdge` reciben `RequestId` como dependencia nueva y
+opcional. Si los arma el contenedor —lo normal—, no hay nada que hacer. `ApiCall` tiene tres
+campos más, opcionales.
 
 ---
 
