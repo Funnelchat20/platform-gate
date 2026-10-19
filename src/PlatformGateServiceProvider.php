@@ -7,8 +7,10 @@ namespace Funnelchat\PlatformGate;
 use Funnelchat\PlatformGate\Caller\CallerContext;
 use Funnelchat\PlatformGate\Caller\KeyIdentity;
 use Funnelchat\PlatformGate\Caller\KindColumnProbe;
+use Funnelchat\PlatformGate\Console\PurgeUsageCommand;
 use Funnelchat\PlatformGate\Edge\EdgeTrust;
 use Funnelchat\PlatformGate\Http\Middleware\PlatformGate;
+use Funnelchat\PlatformGate\Http\RequestId;
 use Funnelchat\PlatformGate\Limits\DailyCallCap;
 use Funnelchat\PlatformGate\Permissions\PermissionChecker;
 use Funnelchat\PlatformGate\Permissions\RoutePermissions;
@@ -62,6 +64,12 @@ final class PlatformGateServiceProvider extends ServiceProvider
             $app->make(LoggerInterface::class),
         ));
 
+        // Igual que `EdgeTrust`: lo de cada pedido queda en sus atributos.
+        $this->app->singleton(RequestId::class, fn ($app) => new RequestId(
+            $app->make(EdgeTrust::class),
+            $app->make(LoggerInterface::class),
+        ));
+
         // Secreto compartido entre dominios si está definido; si no, el APP_KEY de este dominio (0.5).
         $this->app->singleton(KeyIdentity::class, fn ($app) => new KeyIdentity(
             (string) ($app['config']->get('platform-gate.key_id_secret') ?: $app['config']->get('app.key'))
@@ -102,6 +110,7 @@ final class PlatformGateServiceProvider extends ServiceProvider
             (bool) $app['config']->get('platform-gate.block_on_unreadable_kind', false),
             (bool) $app['config']->get('platform-gate.require_edge', false),
             (string) ($app['config']->get('platform-gate.public_url') ?: 'https://api.funnelchat.com'),
+            $app->make(RequestId::class),
         ));
     }
 
@@ -112,6 +121,10 @@ final class PlatformGateServiceProvider extends ServiceProvider
         ], 'platform-gate-config');
 
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([PurgeUsageCommand::class]);
+        }
 
         $this->app->make(Router::class)->aliasMiddleware('platform-gate', PlatformGate::class);
     }

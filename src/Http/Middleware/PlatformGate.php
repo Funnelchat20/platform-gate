@@ -14,11 +14,13 @@ use Funnelchat\PlatformGate\Edge\EdgeTrust;
 use Funnelchat\PlatformGate\Exceptions\GateException;
 use Funnelchat\PlatformGate\Exceptions\GateUnavailable;
 use Funnelchat\PlatformGate\Exceptions\UsePublicEndpoint;
+use Funnelchat\PlatformGate\Http\RequestId;
 use Funnelchat\PlatformGate\Limits\DailyCallCap;
 use Funnelchat\PlatformGate\Permissions\PermissionChecker;
 use Funnelchat\PlatformGate\Permissions\RoutePermissions;
 use Funnelchat\PlatformGate\Usage\ApiCall;
 use Funnelchat\PlatformGate\Usage\ApiCallRecorder;
+use Funnelchat\PlatformGate\Usage\CreatedResource;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\Request;
@@ -41,6 +43,8 @@ final class PlatformGate
 
     private ?string $keyIdForLog = null;
 
+    private readonly RequestId $requestIds;
+
     public function __construct(
         private readonly CallerContext $context,
         private readonly RoutePermissions $routes,
@@ -56,7 +60,10 @@ final class PlatformGate
         private readonly bool $blockOnUnreadableKind = false,
         private readonly bool $requireEdge = false,
         private readonly string $publicUrl = 'https://api.funnelchat.com',
+        ?RequestId $requestIds = null,
     ) {
+        // Opcional sólo para no romperle el constructor a quien lo arma a mano (0.8).
+        $this->requestIds = $requestIds ?? new RequestId($edge, $logger);
     }
 
     public function handle(Request $request, Closure $next): Response
@@ -68,13 +75,17 @@ final class PlatformGate
         // lee su veredicto.
         $fromEdge = $this->edge->inspect($request);
 
+        // El id del pedido antes que cualquier decisión: un rechazo también lo devuelve, y lo
+        // que se loguee de acá en adelante lo lleva.
+        $this->requestIds->for($request);
+
         try {
             $this->classify($request, $fromEdge);
         } catch (GateException $e) {
-            return $this->reject($e);
+            return $this->requestIds->stamp($request, $this->reject($e));
         }
 
-        return $next($request);
+        return $this->requestIds->stamp($request, $next($request));
     }
 
     /**
@@ -87,6 +98,10 @@ final class PlatformGate
             return; // sólo se registran las llamadas de key.
         }
 
+        // Lo que declaró el controlador, si declaró algo. Un rechazo del portero no llegó al
+        // controlador: sale sin recurso.
+        $resource = CreatedResource::of($request);
+
         $this->recorder->record(new ApiCall(
             keyId: $this->keyIdForLog,
             route: $request->route()?->uri() ?? $request->path(),
@@ -94,6 +109,9 @@ final class PlatformGate
             statusCode: $response->getStatusCode(),
             occurredAt: gmdate('Y-m-d H:i:s', (int) ($this->startedAt ?? microtime(true))),
             durationMs: (int) round((microtime(true) - ($this->startedAt ?? microtime(true))) * 1000),
+            requestId: RequestId::of($request),
+            resourceType: $resource?->type,
+            resourceId: $resource?->id,
         ));
     }
 
@@ -322,7 +340,8 @@ final class PlatformGate
         }
 
         // Nada de `kind`, nada de `key_id`, nada de identificadores de cuenta: lo que el
-        // cliente ve no lleva nada nuestro (D5, y pedidos P1/P2).
+        // cliente ve no lleva nada nuestro (D5, y pedidos P1/P2). `X-Request-Id`, que se le
+        // pone en `handle()`, es un id al azar del pedido, no uno nuestro.
         return new JsonResponse($payload, $e->status(), $headers);
     }
 }

@@ -28,6 +28,9 @@ use Illuminate\Http\Request;
  *
  * Sólo toca los pedidos a `api/*` (o a los patrones que se le pasen). El resto de la
  * aplicación sigue contestando como antes.
+ *
+ * Lleva `X-Request-Id` (0.8), como cualquier otro rechazo: el portero no llegó a correr, pero
+ * el integrador igual tiene que poder citar el pedido.
  */
 final readonly class UnauthenticatedResponse
 {
@@ -52,7 +55,10 @@ final readonly class UnauthenticatedResponse
         return new JsonResponse(
             ['error' => 'unauthenticated', 'message' => self::MESSAGE],
             401,
-            ['WWW-Authenticate' => 'Bearer'],
+            [
+                'WWW-Authenticate' => 'Bearer',
+                RequestId::RESPONSE_HEADER => app(RequestId::class)->for($request),
+            ],
         );
     }
 }

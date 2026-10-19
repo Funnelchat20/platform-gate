@@ -6,7 +6,9 @@ namespace Funnelchat\PlatformGate\Http\Middleware;
 
 use Closure;
 use Funnelchat\PlatformGate\Edge\EdgeTrust;
+use Funnelchat\PlatformGate\Http\RequestId;
 use Illuminate\Http\Request;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -21,17 +23,25 @@ use Symfony\Component\HttpFoundation\Response;
  * Va al final y no al principio a propósito: el `TrustProxies` de Laravel mira el host
  * original para decidir en qué proxies confía (`*.on-vapor.com`, Laravel Cloud), y no tiene
  * que ver el ya reescrito.
+ *
+ * Desde 0.8 también decide el id del pedido (`RequestId`): así el log de todo el pedido lo
+ * lleva, y `X-Request-Id` sale en todas las respuestas del dominio —también un 500 o un 401
+ * que no pasaron por el portero—.
  */
 final class TrustEdge
 {
-    public function __construct(private readonly EdgeTrust $edge)
+    private readonly RequestId $requestIds;
+
+    public function __construct(private readonly EdgeTrust $edge, ?RequestId $requestIds = null)
     {
+        $this->requestIds = $requestIds ?? new RequestId($edge, app(LoggerInterface::class));
     }
 
     public function handle(Request $request, Closure $next): Response
     {
         $this->edge->inspect($request);
+        $this->requestIds->for($request);
 
-        return $next($request);
+        return $this->requestIds->stamp($request, $next($request));
     }
 }
