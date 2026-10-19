@@ -15,7 +15,7 @@ use Psr\Log\LoggerInterface;
  * N es `platform-gate.usage_retention_days`, 90 por defecto: lo mismo que ya hacía accounts con
  * su `api-usage:purge`, ahora para todos. El dominio lo programa todos los días:
  *
- *     Schedule::command('platform-gate:purge-usage')->daily();
+ *     Schedule::command('platform-gate:purge-usage')->daily()->onOneServer()->withoutOverlapping();
  *
  * Falla cerrado: con N menor que 1, o algo que no es un entero, no borra nada y termina con
  * error. Un 0 que se coló en el env no puede vaciar la tabla.

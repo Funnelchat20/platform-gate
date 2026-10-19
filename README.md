@@ -42,8 +42,14 @@ Y la purga del registro, todos los días (ver «El registro de llamadas»):
 // routes/console.php
 use Illuminate\Support\Facades\Schedule;
 
-Schedule::command('platform-gate:purge-usage')->daily();
+Schedule::command('platform-gate:purge-usage')->daily()->onOneServer()->withoutOverlapping();
 ```
+
+`onOneServer()`: con varias instancias corriendo el scheduler, corre en una sola.
+`withoutOverlapping()`: si la corrida anterior sigue —la primera, en una tabla que nunca se
+purgó, puede tardar—, la nueva no arranca. Las dos usan un lock del store de cache por
+defecto, que tiene que ser compartido y soportar locks (Redis, base de datos, Memcached o
+DynamoDB); con `array` o `file` no protegen nada entre instancias.
 
 El middleware va sobre el grupo de rutas de API que ya existe. **No crea rutas nuevas.**
 
@@ -490,7 +496,7 @@ primero «Actualizar desde 0.6»; las dos guías se pueden hacer en el mismo dep
 4. **Programar la purga**, todos los días:
 
    ```php
-   Schedule::command('platform-gate:purge-usage')->daily();
+   Schedule::command('platform-gate:purge-usage')->daily()->onOneServer()->withoutOverlapping();
    ```
 
    accounts no: sigue con su `api-usage:purge`, que hace lo mismo sobre la misma tabla.
