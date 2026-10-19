@@ -15,6 +15,7 @@ use Funnelchat\PlatformGate\Limits\DailyCallCap;
 use Funnelchat\PlatformGate\Permissions\PermissionChecker;
 use Funnelchat\PlatformGate\Permissions\RoutePermissions;
 use Funnelchat\PlatformGate\Usage\ApiCallRecorder;
+use Funnelchat\PlatformGate\Usage\CreatedResourceContext;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Routing\Router;
@@ -31,6 +32,10 @@ final class PlatformGateServiceProvider extends ServiceProvider
         // El contexto es del REQUEST, no de la aplicación: `scoped` para que en Octane o
         // en un worker de cola no se filtre el llamador de un request al siguiente.
         $this->app->scoped(CallerContext::class);
+
+        // Lo que creó la llamada, también del request (0.8). No en los atributos del pedido:
+        // el FormRequest del controlador es una copia y el portero no la ve.
+        $this->app->scoped(CreatedResourceContext::class);
 
         $this->app->singleton(PermissionChecker::class);
 
@@ -111,6 +116,7 @@ final class PlatformGateServiceProvider extends ServiceProvider
             (bool) $app['config']->get('platform-gate.require_edge', false),
             (string) ($app['config']->get('platform-gate.public_url') ?: 'https://api.funnelchat.com'),
             $app->make(RequestId::class),
+            $app->make(CreatedResourceContext::class),
         ));
     }
 

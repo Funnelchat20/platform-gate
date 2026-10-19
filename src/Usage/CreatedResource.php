@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Funnelchat\PlatformGate\Usage;
 
 use Illuminate\Container\Container;
-use Illuminate\Http\Request;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
@@ -14,7 +13,10 @@ use Throwable;
  * portero lo guarda en la fila de `api_call_log` al terminar el pedido (contrato
  * 1019-registro-llamadas, L1). Así soporte va de la llamada a lo que produjo sin adivinar.
  *
- *     CreatedResource::declare($request, 'message', $message->id);
+ *     CreatedResource::declare('message', $message->id);
+ *
+ * No recibe el pedido: queda en `CreatedResourceContext`, que es del pedido en curso, así que
+ * se puede declarar desde el controlador —con o sin FormRequest— o desde un servicio.
  *
  * Un recurso por llamada: si se declara dos veces, queda la última. Sin declaración, la fila
  * queda sin recurso, como en 0.7.
@@ -30,8 +32,6 @@ use Throwable;
  */
 final readonly class CreatedResource
 {
-    public const ATTRIBUTE = 'platform-gate.created_resource';
-
     /** `message`, `contact`, `tag`, `scheduled_message`… Minúsculas, hasta 32. */
     private const TYPE = '/^[a-z][a-z0-9_]{0,31}$/D';
 
@@ -44,7 +44,7 @@ final readonly class CreatedResource
     ) {
     }
 
-    public static function declare(Request $request, string $type, int|string $id): void
+    public static function declare(string $type, int|string $id): void
     {
         $id = (string) $id;
 
@@ -60,14 +60,13 @@ final readonly class CreatedResource
             return;
         }
 
-        $request->attributes->set(self::ATTRIBUTE, new self($type, $id));
+        Container::getInstance()->make(CreatedResourceContext::class)->set(new self($type, $id));
     }
 
-    public static function of(Request $request): ?self
+    /** Lo declarado en el pedido en curso, o `null`. */
+    public static function current(): ?self
     {
-        $declared = $request->attributes->get(self::ATTRIBUTE);
-
-        return $declared instanceof self ? $declared : null;
+        return Container::getInstance()->make(CreatedResourceContext::class)->get();
     }
 
     private static function warn(string $invalid, ?string $type): void

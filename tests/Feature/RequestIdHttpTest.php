@@ -15,6 +15,7 @@ use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Foundation\Auth\User;
 use Illuminate\Foundation\Configuration\Exceptions;
+use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Http\Request;
 use Laravel\Sanctum\HasApiTokens;
 use RuntimeException;
@@ -43,9 +44,17 @@ final class RequestIdHttpTest extends GateTestCase
     protected function defineRoutes($router): void
     {
         $router->middleware(PlatformGate::class)->post('api/v1/messages', static function (Request $request): array {
-            CreatedResource::declare($request, 'message', 981);
+            CreatedResource::declare('message', 981);
 
             return ['seen' => RequestId::of($request)];
+        });
+
+        // Lo normal en una ruta que crea: el controlador recibe un FormRequest, que es una
+        // copia del pedido.
+        $router->middleware(PlatformGate::class)->post('api/v1/contacts', static function (StoreContactRequest $request): array {
+            CreatedResource::declare('contact', 42);
+
+            return ['seen' => RequestId::of($request), 'name' => $request->validated('name')];
         });
 
         $router->middleware(PlatformGate::class)->get('api/v1/broken', static fn () => throw new RuntimeException('se rompió'));
@@ -85,6 +94,19 @@ final class RequestIdHttpTest extends GateTestCase
         $this->assertSame('981', $row['resource_id']);
     }
 
+    public function test_un_controlador_con_form_request_deja_el_recurso_en_la_fila(): void
+    {
+        $this->postJson('api/v1/contacts', ['name' => 'x'], [
+            EdgeTrust::SECRET_HEADER => self::SECRET,
+            RequestId::EDGE_HEADER => self::EDGE_ID,
+        ])->assertOk()->assertJson(['seen' => self::EDGE_ID, 'name' => 'x']);
+
+        $row = $this->onlyRow();
+        $this->assertSame(self::EDGE_ID, $row['request_id']);
+        $this->assertSame('contact', $row['resource_type']);
+        $this->assertSame('42', $row['resource_id']);
+    }
+
     public function test_generado_tambien_es_uno_solo_aunque_lo_pidan_trust_edge_y_el_portero(): void
     {
         $response = $this->postJson('api/v1/messages')->assertOk();
@@ -115,5 +137,19 @@ final class RequestIdHttpTest extends GateTestCase
             EdgeTrust::SECRET_HEADER => self::SECRET,
             RequestId::EDGE_HEADER => self::EDGE_ID,
         ])->assertStatus(401)->assertHeader(RequestId::RESPONSE_HEADER, self::EDGE_ID);
+    }
+}
+
+final class StoreContactRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    /** @return array<string, string> */
+    public function rules(): array
+    {
+        return ['name' => 'required|string'];
     }
 }

@@ -297,22 +297,29 @@ public function store(StoreMessageRequest $request): JsonResponse
 {
     $message = $this->messages->send($request->validated());
 
-    CreatedResource::declare($request, 'message', $message->id);
+    CreatedResource::declare('message', $message->id);
 
     return response()->json(new MessageResource($message), 201);
 }
 ```
 
 ```php
-CreatedResource::declare(Request $request, string $type, int|string $id): void
+CreatedResource::declare(string $type, int|string $id): void
+CreatedResource::current(): ?CreatedResource   // lo declarado en este pedido
 ```
+
+No recibe el pedido: la declaración queda en el contexto del request (`scoped`, como
+`CallerContext`), no en los atributos del pedido. El FormRequest que recibe el controlador es
+una copia del pedido, y lo que se escribe en sus atributos el portero no lo ve. Se puede
+declarar desde el controlador o desde un servicio, con o sin FormRequest.
 
 - **Tipo**: minúsculas, números y `_`, hasta 32, empezando con letra: `message`, `contact`,
   `tag`, `note`, `scheduled_message`, `webhook_subscription`.
 - **Id**: un entero o un texto de letras, números, `_` y `-`, hasta 64: un id autoincremental,
   un UUID, un ULID, un `msg_…`. Un `+`, una `@` o un espacio no pasan. Un teléfono sin `+` no
   se distingue de un id entero: eso lo cuida quien declara.
-- **Un recurso por llamada.** Si se declara dos veces, queda la última válida.
+- **Un recurso por llamada.** Si se declara dos veces, queda la última válida. El portero
+  vacía la declaración al empezar y al terminar cada pedido: no queda pegada al siguiente.
 - **Una declaración inválida no rompe la llamada.** Cuando el controlador declara, el recurso
   ya existe: un 500 ahí haría que el cliente reintente y lo cree dos veces. No se guarda, queda
   un warning en el log —sin el valor— y la fila sale sin recurso. Un test del dominio que
@@ -468,7 +475,7 @@ primero «Actualizar desde 0.6»; las dos guías se pueden hacer en el mismo dep
    tipo e id; las que no crean nada, no:
 
    ```php
-   CreatedResource::declare($request, 'message', $message->id);
+   CreatedResource::declare('message', $message->id);
    ```
 
    El camino encolado también: si la respuesta devuelve un id antes de que el job corra, ése

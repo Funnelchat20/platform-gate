@@ -87,7 +87,7 @@ final class UsageMigrationTest extends GateTestCase
         $this->migrateUsage(onlyOld: true);
 
         $response = $this->gateCall('POST', 'api/v1/messages', $this->key(), [], static function (Request $request): Response {
-            CreatedResource::declare($request, 'message', 981);
+            CreatedResource::declare('message', 981);
 
             return new Response('creado', 201);
         });

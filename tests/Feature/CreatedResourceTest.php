@@ -35,7 +35,7 @@ final class CreatedResourceTest extends GateTestCase
     private function controllerDeclaring(string $type, int|string $id, int $status = 201): callable
     {
         return static function (Request $request) use ($type, $id, $status): Response {
-            CreatedResource::declare($request, $type, $id);
+            CreatedResource::declare($type, $id);
 
             return new Response('creado', $status);
         };
@@ -84,8 +84,8 @@ final class CreatedResourceTest extends GateTestCase
     public function test_si_se_declara_dos_veces_queda_la_ultima(): void
     {
         $this->gateCall('POST', 'api/v1/messages', $this->key(), [], static function (Request $request): Response {
-            CreatedResource::declare($request, 'contact', 5);
-            CreatedResource::declare($request, 'message', 981);
+            CreatedResource::declare('contact', 5);
+            CreatedResource::declare('message', 981);
 
             return new Response('creado', 201);
         });
@@ -134,8 +134,8 @@ final class CreatedResourceTest extends GateTestCase
     public function test_una_declaracion_invalida_no_pisa_una_valida_anterior(): void
     {
         $this->gateCall('POST', 'api/v1/messages', $this->key(), [], static function (Request $request): Response {
-            CreatedResource::declare($request, 'message', 981);
-            CreatedResource::declare($request, 'contact', '+5491122334455');
+            CreatedResource::declare('message', 981);
+            CreatedResource::declare('contact', '+5491122334455');
 
             return new Response('creado', 201);
         });
@@ -166,21 +166,31 @@ final class CreatedResourceTest extends GateTestCase
 
     public function test_se_lee_lo_que_se_declaro(): void
     {
-        $request = Request::create('/api/v1/messages', 'POST');
+        $this->assertNull(CreatedResource::current());
 
-        $this->assertNull(CreatedResource::of($request));
+        CreatedResource::declare('message', 981);
 
-        CreatedResource::declare($request, 'message', 981);
-
-        $this->assertSame('message', CreatedResource::of($request)?->type);
-        $this->assertSame('981', CreatedResource::of($request)?->id);
+        $this->assertSame('message', CreatedResource::current()?->type);
+        $this->assertSame('981', CreatedResource::current()?->id);
     }
 
-    public function test_el_cliente_no_puede_declarar_por_query_ni_por_cuerpo(): void
+    public function test_una_declaracion_no_queda_pegada_al_pedido_siguiente(): void
     {
-        // Los atributos del pedido no se llenan desde la entrada: sólo el código los escribe.
-        $request = Request::create('/api/v1/messages', 'POST', [CreatedResource::ATTRIBUTE => 'message']);
+        // El contexto es del request, pero dos llamadas en el mismo proceso (un test, un worker
+        // de larga vida) lo comparten si nadie lo vacía: el portero lo vacía.
+        $this->gateCall('POST', 'api/v1/messages', $this->key(), [], $this->controllerDeclaring('message', 981));
+        $this->gateCall('POST', 'api/v1/messages', $this->key());
 
-        $this->assertNull(CreatedResource::of($request));
+        $this->assertSame(['981', null], array_column($this->rows(), 'resource_id'));
+        $this->assertNull(CreatedResource::current());
+    }
+
+    public function test_una_declaracion_previa_al_portero_no_cuenta(): void
+    {
+        CreatedResource::declare('contact', 5);
+
+        $this->gateCall('POST', 'api/v1/messages', $this->key());
+
+        $this->assertNull($this->onlyRow()['resource_id']);
     }
 }

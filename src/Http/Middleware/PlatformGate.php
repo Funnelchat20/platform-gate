@@ -20,7 +20,7 @@ use Funnelchat\PlatformGate\Permissions\PermissionChecker;
 use Funnelchat\PlatformGate\Permissions\RoutePermissions;
 use Funnelchat\PlatformGate\Usage\ApiCall;
 use Funnelchat\PlatformGate\Usage\ApiCallRecorder;
-use Funnelchat\PlatformGate\Usage\CreatedResource;
+use Funnelchat\PlatformGate\Usage\CreatedResourceContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\Request;
@@ -45,6 +45,8 @@ final class PlatformGate
 
     private readonly RequestId $requestIds;
 
+    private readonly CreatedResourceContext $resources;
+
     public function __construct(
         private readonly CallerContext $context,
         private readonly RoutePermissions $routes,
@@ -61,14 +63,20 @@ final class PlatformGate
         private readonly bool $requireEdge = false,
         private readonly string $publicUrl = 'https://api.funnelchat.com',
         ?RequestId $requestIds = null,
+        ?CreatedResourceContext $resources = null,
     ) {
         // Opcional sólo para no romperle el constructor a quien lo arma a mano (0.8).
         $this->requestIds = $requestIds ?? new RequestId($edge, $logger);
+        $this->resources = $resources ?? app(CreatedResourceContext::class);
     }
 
     public function handle(Request $request, Closure $next): Response
     {
         $this->startedAt = microtime(true);
+
+        // Lo que se declare desde acá es de este pedido, no de uno anterior que compartió el
+        // contexto (un test con dos llamadas, un worker de larga vida).
+        $this->resources->clear();
 
         // El borde se mira para cualquier llamador, no sólo para las keys: el host público y
         // la IP del cliente valen para toda la respuesta. Si `TrustEdge` ya corrió, esto sólo
@@ -94,13 +102,14 @@ final class PlatformGate
      */
     public function terminate(Request $request, Response $response): void
     {
+        // Lo que declaró el controlador, si declaró algo. Un rechazo del portero no llegó al
+        // controlador: sale sin recurso.
+        $resource = $this->resources->get();
+        $this->resources->clear();
+
         if ($this->keyIdForLog === null) {
             return; // sólo se registran las llamadas de key.
         }
-
-        // Lo que declaró el controlador, si declaró algo. Un rechazo del portero no llegó al
-        // controlador: sale sin recurso.
-        $resource = CreatedResource::of($request);
 
         $this->recorder->record(new ApiCall(
             keyId: $this->keyIdForLog,
