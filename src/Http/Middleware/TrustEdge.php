@@ -8,7 +8,6 @@ use Closure;
 use Funnelchat\PlatformGate\Edge\EdgeTrust;
 use Funnelchat\PlatformGate\Http\RequestId;
 use Illuminate\Http\Request;
-use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -32,11 +31,10 @@ use Symfony\Component\HttpFoundation\Response;
  */
 final class TrustEdge
 {
-    private readonly RequestId $requestIds;
-
-    public function __construct(private readonly EdgeTrust $edge, ?RequestId $requestIds = null)
-    {
-        $this->requestIds = $requestIds ?? new RequestId($edge, app(LoggerInterface::class));
+    public function __construct(
+        private readonly EdgeTrust $edge,
+        private readonly RequestId $requestIds,
+    ) {
     }
 
     public function handle(Request $request, Closure $next): Response
