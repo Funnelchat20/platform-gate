@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Funnelchat\PlatformGate\Usage;
 
 use Illuminate\Database\ConnectionInterface;
+use Illuminate\Support\Carbon;
 use PDOException;
 use Psr\Log\LoggerInterface;
 use Throwable;
@@ -27,11 +28,17 @@ use Throwable;
  * en `KindColumnProbe`, y desde ahí se escribe directo la fila de 0.7. Bajo PHP-FPM un proceso
  * atiende un pedido, así que ahí es una vez por llamada mientras dure la ventana entre el
  * deploy y el `migrate`.
+ *
+ * El modo 0.7 se apaga solo: mientras dura, se vuelve a probar con las columnas como mucho una
+ * vez por minuto. Después del `migrate`, un proceso de larga vida vuelve a escribir las filas
+ * completas sin que haya que reiniciarlo.
  */
 final class ApiCallRecorder
 {
-    /** Ya se vio que faltan las columnas de 0.8: no se vuelve a intentar con ellas. */
-    private bool $withoutNewColumns = false;
+    public const RECHECK_SECONDS = 60;
+
+    /** Faltan las columnas de 0.8: hasta este momento (unix) no se vuelve a probar con ellas. */
+    private ?int $withoutNewColumnsUntil = null;
 
     public function __construct(
         private readonly ConnectionInterface $connection,
@@ -42,7 +49,9 @@ final class ApiCallRecorder
 
     public function record(ApiCall $call): void
     {
-        if ($this->withoutNewColumns) {
+        $now = Carbon::now()->getTimestamp();
+
+        if ($this->withoutNewColumnsUntil !== null && $now < $this->withoutNewColumnsUntil) {
             $this->insertWithoutNewColumns($call);
 
             return;
@@ -52,23 +61,36 @@ final class ApiCallRecorder
             $this->connection->table($this->table)->insert($call->toRow());
         } catch (Throwable $e) {
             if (self::isMissingColumn($e)) {
-                $this->withoutNewColumns = true;
+                // Una vez por proceso, y antes de reintentar: lo que falta es la migración, salga
+                // o no la fila. Las comprobaciones de cada minuto que siguen fallando no lo repiten.
+                if ($this->withoutNewColumnsUntil === null) {
+                    $this->logger->warning(
+                        'platform-gate: a la tabla de uso le faltan las columnas de 0.8: las llamadas se '
+                        .'registran sin `request_id` ni recurso. Corré la migración de 0.8 '
+                        .'(`php artisan migrate`) en la conexión de uso.',
+                        ['table' => $this->table],
+                    );
+                }
 
-                // Una vez por proceso, y antes de reintentar: lo que falta es la migración,
-                // salga o no la fila.
-                $this->logger->warning(
-                    'platform-gate: a la tabla de uso le faltan las columnas de 0.8: las llamadas se '
-                    .'registran sin `request_id` ni recurso. Corré la migración de 0.8 '
-                    .'(`php artisan migrate`) en la conexión de uso.',
-                    ['table' => $this->table],
-                );
-
+                $this->withoutNewColumnsUntil = $now + self::RECHECK_SECONDS;
                 $this->insertWithoutNewColumns($call);
 
                 return;
             }
 
             $this->couldNotRecord($call, $e);
+
+            return;
+        }
+
+        if ($this->withoutNewColumnsUntil !== null) {
+            $this->withoutNewColumnsUntil = null;
+
+            $this->logger->info(
+                'platform-gate: la tabla de uso ya tiene las columnas de 0.8: las llamadas vuelven a '
+                .'registrarse con `request_id` y recurso.',
+                ['table' => $this->table],
+            );
         }
     }
 

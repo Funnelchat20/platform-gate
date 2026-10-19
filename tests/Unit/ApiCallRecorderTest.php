@@ -9,6 +9,7 @@ use Funnelchat\PlatformGate\Usage\ApiCallRecorder;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\QueryException;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Carbon;
 use PDOException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -115,6 +116,49 @@ final class ApiCallRecorderTest extends TestCase
         // Un INSERT con las columnas nuevas, y después sólo los de 0.7.
         $this->assertSame([true, false, false, false], array_map(static fn (array $row) => array_key_exists('request_id', $row), $this->inserts));
         $this->assertCount(1, $this->logged, 'un solo warning');
+    }
+
+    public function test_el_modo_0_7_se_apaga_solo_despues_del_migrate(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-10-19 12:00:00', 'UTC'));
+
+        $migrated = false;
+        $missing = self::queryException(['42S22', 1054, "Unknown column 'request_id' in 'field list'"]);
+
+        $recorder = $this->recorder(static function (array $row) use (&$migrated, $missing): void {
+            if (! $migrated && array_key_exists('request_id', $row)) {
+                throw $missing;
+            }
+        });
+
+        try {
+            $recorder->record($this->call());             // descubre: completa (falla) + 0.7
+
+            Carbon::setTestNow(Carbon::parse('2026-10-19 12:00:59', 'UTC'));
+            $recorder->record($this->call());             // dentro del minuto: sólo 0.7
+
+            Carbon::setTestNow(Carbon::parse('2026-10-19 12:01:00', 'UTC'));
+            $recorder->record($this->call());             // pasó el minuto: prueba (falla) + 0.7
+
+            $migrated = true;                             // corrió el `migrate`
+            Carbon::setTestNow(Carbon::parse('2026-10-19 12:01:30', 'UTC'));
+            $recorder->record($this->call());             // dentro del minuto otra vez: sólo 0.7
+
+            Carbon::setTestNow(Carbon::parse('2026-10-19 12:02:00', 'UTC'));
+            $recorder->record($this->call());             // prueba y sale: completa
+            $recorder->record($this->call());             // ya apagado: completa
+        } finally {
+            Carbon::setTestNow();
+        }
+
+        $this->assertSame(
+            [true, false, false, true, false, false, true, true],
+            array_map(static fn (array $row) => array_key_exists('request_id', $row), $this->inserts),
+        );
+
+        // Un warning al descubrirlo, ninguno en las comprobaciones que fallan, un info al salir.
+        $this->assertSame(['warning', 'info'], array_column($this->logged, 0));
+        $this->assertStringContainsString('ya tiene las columnas de 0.8', $this->logged[1][1]);
     }
 
     public function test_otra_falla_no_hace_que_se_deje_de_intentar_con_las_columnas(): void

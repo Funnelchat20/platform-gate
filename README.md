@@ -497,7 +497,10 @@ primero «Actualizar desde 0.6»; las dos guías se pueden hacer en el mismo dep
    Mientras la migración no corrió, la fila se escribe igual, como en 0.7, y el log avisa
    `Corré la migración de 0.8` una vez por proceso. Bajo PHP-FPM un proceso atiende un
    pedido: ahí es una vez por llamada, mientras dure la ventana entre el deploy y el
-   `migrate`. Cualquier otra falla al escribir la fila se loguea como en 0.7, sin reintento.
+   `migrate`. En un proceso de larga vida, el modo 0.7 se apaga solo: se vuelve a probar con
+   las columnas como mucho una vez por minuto y, después del `migrate`, las filas vuelven a
+   salir completas sin reiniciar nada (queda un info en el log). Cualquier otra falla al
+   escribir la fila se loguea como en 0.7, sin reintento.
 3. **Declarar los recursos.** En cada ruta de `allowed` que crea algo, el controlador declara
    tipo e id; las que no crean nada, no:
 
