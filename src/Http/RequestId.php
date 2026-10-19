@@ -7,6 +7,7 @@ namespace Funnelchat\PlatformGate\Http;
 use Funnelchat\PlatformGate\Edge\EdgeTrust;
 use Illuminate\Http\Request;
 use Psr\Log\LoggerInterface;
+use ReflectionMethod;
 use Symfony\Component\HttpFoundation\Response;
 use Throwable;
 
@@ -27,7 +28,9 @@ use Throwable;
  * segunda vez sólo lee lo decidido.
  *
  * Al decidirlo, se suma como `request_id` al contexto compartido del log del dominio: lo que
- * se loguee de ahí en adelante en ese pedido lo lleva.
+ * se loguee de ahí en adelante en ese pedido lo lleva. Al terminar el pedido se saca
+ * (`forgetFromLog()`, desde el `terminate` del portero y de `TrustEdge`), para no depender de
+ * cómo maneja el proceso el estado entre pedidos.
  *
  * Es un id al azar, no un identificador nuestro: devolverlo no le dice nada a nadie (D5).
  */
@@ -141,6 +144,38 @@ final readonly class RequestId
         }
 
         return $id;
+    }
+
+    /**
+     * Saca `request_id` del log y deja el resto del contexto como estaba.
+     *
+     * Dos lugares: el contexto compartido del `LogManager` —lo que reciben los canales que se
+     * abran después— y el de cada canal ya abierto. Para el segundo hace falta
+     * `withoutContext($keys)`; un `withoutContext()` sin parámetros vacía TODO el contexto del
+     * canal, el del dominio incluido, y entonces los canales no se tocan.
+     */
+    public function forgetFromLog(): void
+    {
+        $logger = $this->logger;
+
+        try {
+            if (method_exists($logger, 'sharedContext') && method_exists($logger, 'flushSharedContext')) {
+                $rest = array_diff_key((array) $logger->sharedContext(), ['request_id' => true]);
+
+                $logger->flushSharedContext();
+
+                if ($rest !== [] && method_exists($logger, 'shareContext')) {
+                    $logger->shareContext($rest);
+                }
+            }
+
+            if (method_exists($logger, 'withoutContext')
+                && (new ReflectionMethod($logger, 'withoutContext'))->getNumberOfParameters() > 0) {
+                $logger->withoutContext(['request_id']);
+            }
+        } catch (Throwable) {
+            // Medición, no control: un log que no deja limpiar no rompe nada.
+        }
     }
 
     /**

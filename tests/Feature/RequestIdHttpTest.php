@@ -157,6 +157,18 @@ final class RequestIdHttpTest extends GateTestCase
         $this->assertSame(self::EDGE_ID, $this->onlyRow()['request_id']);
     }
 
+    public function test_con_trust_edge_el_log_queda_limpio_al_terminar_aunque_el_portero_no_corra(): void
+    {
+        $log = $this->app->make('log');
+        $this->app->instance(\Psr\Log\LoggerInterface::class, $log);
+        $this->app->forgetInstance(EdgeTrust::class);
+        $this->app->forgetInstance(RequestId::class);
+
+        $this->get('panel/plain')->assertOk();
+
+        $this->assertArrayNotHasKey('request_id', $log->sharedContext());
+    }
+
     public function test_el_401_lo_devuelve_aunque_el_portero_no_haya_corrido(): void
     {
         UnauthenticatedResponse::register(new Exceptions($this->app->make(ExceptionHandler::class)));

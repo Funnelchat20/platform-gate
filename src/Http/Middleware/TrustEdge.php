@@ -46,4 +46,10 @@ final class TrustEdge
 
         return $this->requestIds->stampIfMissing($request, $next($request));
     }
+
+    /** El pedido terminó: `request_id` sale del log. */
+    public function terminate(Request $request, Response $response): void
+    {
+        $this->requestIds->forgetFromLog();
+    }
 }

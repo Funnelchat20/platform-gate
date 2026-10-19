@@ -284,7 +284,10 @@ con el que soporte encuentra la fila y los logs.
   id propio del dominio es el que conocen sus logs.
 - **Va al log.** Se suma como `request_id` al contexto compartido del log del dominio
   (`Log::shareContext()`) en cuanto se decide: si `TrustEdge` está montado, desde el
-  principio del pedido; si no, desde que corre el portero.
+  principio del pedido; si no, desde que corre el portero. Al terminar el pedido (el
+  `terminate` del portero y de `TrustEdge`) se saca, y el resto del contexto del dominio queda
+  como estaba: no depende de cómo maneje el proceso el estado entre pedidos. Lo que el dominio
+  loguee en su propio `terminate` después del portero ya no lo lleva.
 
 Desde el dominio, para un job que encola o un log propio:
 

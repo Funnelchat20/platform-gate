@@ -20,6 +20,7 @@ use Funnelchat\PlatformGate\Permissions\PermissionChecker;
 use Funnelchat\PlatformGate\Permissions\RoutePermissions;
 use Funnelchat\PlatformGate\Usage\ApiCall;
 use Funnelchat\PlatformGate\Usage\ApiCallRecorder;
+use Funnelchat\PlatformGate\Usage\CreatedResource;
 use Funnelchat\PlatformGate\Usage\CreatedResourceContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Contracts\Auth\Authenticatable;
@@ -107,6 +108,16 @@ final class PlatformGate
         $resource = $this->resources->get();
         $this->resources->clear();
 
+        try {
+            $this->recordCall($request, $response, $resource);
+        } finally {
+            // Después de registrar: un warning del registro también lleva el id.
+            $this->requestIds->forgetFromLog();
+        }
+    }
+
+    private function recordCall(Request $request, Response $response, ?CreatedResource $resource): void
+    {
         if ($this->keyIdForLog === null) {
             return; // sólo se registran las llamadas de key.
         }

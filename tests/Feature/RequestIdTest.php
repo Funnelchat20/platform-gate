@@ -288,16 +288,43 @@ final class RequestIdTest extends GateTestCase
         $this->assertSame(self::EDGE_ID, $response->headers->get(RequestId::RESPONSE_HEADER));
     }
 
-    public function test_con_el_log_de_laravel_el_id_queda_en_el_contexto_compartido(): void
+    public function test_con_el_log_de_laravel_el_id_esta_durante_el_pedido_y_sale_al_terminar(): void
     {
-        $this->rebindLogger($this->app->make('log'));
+        $log = $this->app->make('log');
+        $this->rebindLogger($log);
 
-        $response = $this->gateCall('GET', 'api/v1/groups', $this->key());
+        // Algo que el dominio comparte por su cuenta, y un canal ya abierto.
+        $log->shareContext(['service' => 'communities']);
+        $channel = $log->channel();
 
-        $this->assertSame(
-            $response->headers->get(RequestId::RESPONSE_HEADER),
-            $this->app->make('log')->sharedContext()['request_id'] ?? null,
-        );
+        $during = null;
+        $channelDuring = null;
+
+        $response = $this->gateCall('GET', 'api/v1/groups', $this->key(), [], static function () use ($log, $channel, &$during, &$channelDuring) {
+            $during = $log->sharedContext();
+            $channelDuring = (fn () => $this->context)->call($channel);
+
+            return new Response('ok');
+        });
+
+        $id = $response->headers->get(RequestId::RESPONSE_HEADER);
+
+        $this->assertSame($id, $during['request_id'] ?? null);
+        $this->assertSame($id, $channelDuring['request_id'] ?? null);
+
+        // Terminó: sale `request_id`, y lo del dominio sigue.
+        $this->assertSame(['service' => 'communities'], $log->sharedContext());
+        $this->assertSame(['service' => 'communities'], (fn () => $this->context)->call($channel));
+    }
+
+    public function test_al_terminar_un_pedido_que_no_es_de_key_tambien_sale_del_log(): void
+    {
+        $log = $this->app->make('log');
+        $this->rebindLogger($log);
+
+        $this->gateCall('GET', 'api/v1/groups', new TransientToken());
+
+        $this->assertArrayNotHasKey('request_id', $log->sharedContext());
     }
 
     public function test_un_log_sin_contexto_compartido_no_rompe_nada(): void
