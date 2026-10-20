@@ -50,6 +50,16 @@ final class UnauthenticatedResponseTest extends TestCase
             ->assertHeader('WWW-Authenticate', 'Bearer');
     }
 
+    public function test_lleva_x_request_id_aunque_no_haya_trust_edge(): void
+    {
+        // El portero no corrió y `TrustEdge` no está montado: el 401 igual se puede citar.
+        $this->hook();
+
+        $id = $this->getJson('api/v1/groups')->assertStatus(401)->headers->get('X-Request-Id');
+
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/', (string) $id);
+    }
+
     public function test_tambien_cuando_el_pedido_no_pide_json(): void
     {
         // Sin esto, Laravel redirige al login: en una API sin ruta `login`, un 500.

@@ -14,11 +14,15 @@ use Funnelchat\PlatformGate\Edge\EdgeTrust;
 use Funnelchat\PlatformGate\Exceptions\GateException;
 use Funnelchat\PlatformGate\Exceptions\GateUnavailable;
 use Funnelchat\PlatformGate\Exceptions\UsePublicEndpoint;
+use Funnelchat\PlatformGate\Http\RequestId;
 use Funnelchat\PlatformGate\Limits\DailyCallCap;
 use Funnelchat\PlatformGate\Permissions\PermissionChecker;
 use Funnelchat\PlatformGate\Permissions\RoutePermissions;
 use Funnelchat\PlatformGate\Usage\ApiCall;
 use Funnelchat\PlatformGate\Usage\ApiCallRecorder;
+use Funnelchat\PlatformGate\Usage\CreatedResource;
+use Funnelchat\PlatformGate\Usage\CreatedResourceContext;
+use Illuminate\Container\Container;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\Request;
@@ -41,6 +45,10 @@ final class PlatformGate
 
     private ?string $keyIdForLog = null;
 
+    private readonly RequestId $requestIds;
+
+    private readonly CreatedResourceContext $resources;
+
     public function __construct(
         private readonly CallerContext $context,
         private readonly RoutePermissions $routes,
@@ -56,25 +64,40 @@ final class PlatformGate
         private readonly bool $blockOnUnreadableKind = false,
         private readonly bool $requireEdge = false,
         private readonly string $publicUrl = 'https://api.funnelchat.com',
+        ?RequestId $requestIds = null,
+        ?CreatedResourceContext $resources = null,
     ) {
+        // Al final y opcionales (0.8): un `new PlatformGate(...)` armado como en 0.7.1 sigue
+        // andando. Sin pasarlos, salen del contenedor —el singleton de `RequestId`, el mismo de
+        // `TrustEdge` y el 401, y el contexto del request en curso—; nunca se construyen acá.
+        $this->requestIds = $requestIds ?? Container::getInstance()->make(RequestId::class);
+        $this->resources = $resources ?? Container::getInstance()->make(CreatedResourceContext::class);
     }
 
     public function handle(Request $request, Closure $next): Response
     {
         $this->startedAt = microtime(true);
 
+        // Lo que se declare desde acá es de este pedido, no de uno anterior que compartió el
+        // contexto (un test con dos llamadas, un worker de larga vida).
+        $this->resources->clear();
+
         // El borde se mira para cualquier llamador, no sólo para las keys: el host público y
         // la IP del cliente valen para toda la respuesta. Si `TrustEdge` ya corrió, esto sólo
         // lee su veredicto.
         $fromEdge = $this->edge->inspect($request);
 
+        // El id del pedido antes que cualquier decisión: un rechazo también lo devuelve, y lo
+        // que se loguee de acá en adelante lo lleva.
+        $this->requestIds->for($request);
+
         try {
             $this->classify($request, $fromEdge);
         } catch (GateException $e) {
-            return $this->reject($e);
+            return $this->requestIds->stamp($request, $this->reject($e));
         }
 
-        return $next($request);
+        return $this->requestIds->stamp($request, $next($request));
     }
 
     /**
@@ -82,6 +105,21 @@ final class PlatformGate
      * es medición, no debe sumarle latencia a nadie.
      */
     public function terminate(Request $request, Response $response): void
+    {
+        // Lo que declaró el controlador, si declaró algo. Un rechazo del portero no llegó al
+        // controlador: sale sin recurso.
+        $resource = $this->resources->get();
+        $this->resources->clear();
+
+        try {
+            $this->recordCall($request, $response, $resource);
+        } finally {
+            // Después de registrar: un warning del registro también lleva el id.
+            $this->requestIds->forgetFromLog($request);
+        }
+    }
+
+    private function recordCall(Request $request, Response $response, ?CreatedResource $resource): void
     {
         if ($this->keyIdForLog === null) {
             return; // sólo se registran las llamadas de key.
@@ -94,6 +132,9 @@ final class PlatformGate
             statusCode: $response->getStatusCode(),
             occurredAt: gmdate('Y-m-d H:i:s', (int) ($this->startedAt ?? microtime(true))),
             durationMs: (int) round((microtime(true) - ($this->startedAt ?? microtime(true))) * 1000),
+            requestId: RequestId::of($request),
+            resourceType: $resource?->type,
+            resourceId: $resource?->id,
         ));
     }
 
@@ -322,7 +363,8 @@ final class PlatformGate
         }
 
         // Nada de `kind`, nada de `key_id`, nada de identificadores de cuenta: lo que el
-        // cliente ve no lleva nada nuestro (D5, y pedidos P1/P2).
+        // cliente ve no lleva nada nuestro (D5, y pedidos P1/P2). `X-Request-Id`, que se le
+        // pone en `handle()`, es un id al azar del pedido, no uno nuestro.
         return new JsonResponse($payload, $e->status(), $headers);
     }
 }

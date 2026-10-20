@@ -182,12 +182,18 @@ return [
     |---------------------------------------------------------------------------
     | Registro de uso
     |---------------------------------------------------------------------------
-    | Una fila por llamada, append-only, nadie la lee desde el código (D12).
-    | Va aparte de `feature_usage_events` y con sus mismas convenciones, para que
-    | unificar mañana sea un UNION y no arqueología (D20).
+    | Una fila por llamada, nadie la lee desde el código (D12). Nunca se
+    | actualiza; desde 0.8 se purga (abajo). Va aparte de `feature_usage_events`
+    | y con sus mismas convenciones, para que unificar mañana sea un UNION y no
+    | arqueología (D20).
     */
     'usage_connection' => env('PLATFORM_GATE_USAGE_CONNECTION'),
     'usage_table' => env('PLATFORM_GATE_USAGE_TABLE', 'api_call_log'),
+
+    // Días que se guarda cada fila (0.8). `php artisan platform-gate:purge-usage`
+    // borra lo anterior; el dominio lo programa todos los días. Menos de 1, o algo
+    // que no es un entero, y el comando no borra nada y termina con error.
+    'usage_retention_days' => env('PLATFORM_GATE_USAGE_RETENTION_DAYS', 90),
 
     /*
     |---------------------------------------------------------------------------

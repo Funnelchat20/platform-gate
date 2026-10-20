@@ -7,12 +7,15 @@ namespace Funnelchat\PlatformGate;
 use Funnelchat\PlatformGate\Caller\CallerContext;
 use Funnelchat\PlatformGate\Caller\KeyIdentity;
 use Funnelchat\PlatformGate\Caller\KindColumnProbe;
+use Funnelchat\PlatformGate\Console\PurgeUsageCommand;
 use Funnelchat\PlatformGate\Edge\EdgeTrust;
 use Funnelchat\PlatformGate\Http\Middleware\PlatformGate;
+use Funnelchat\PlatformGate\Http\RequestId;
 use Funnelchat\PlatformGate\Limits\DailyCallCap;
 use Funnelchat\PlatformGate\Permissions\PermissionChecker;
 use Funnelchat\PlatformGate\Permissions\RoutePermissions;
 use Funnelchat\PlatformGate\Usage\ApiCallRecorder;
+use Funnelchat\PlatformGate\Usage\CreatedResourceContext;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Routing\Router;
@@ -29,6 +32,10 @@ final class PlatformGateServiceProvider extends ServiceProvider
         // El contexto es del REQUEST, no de la aplicación: `scoped` para que en Octane o
         // en un worker de cola no se filtre el llamador de un request al siguiente.
         $this->app->scoped(CallerContext::class);
+
+        // Lo que creó la llamada, también del request (0.8). No en los atributos del pedido:
+        // el FormRequest del controlador es una copia y el portero no la ve.
+        $this->app->scoped(CreatedResourceContext::class);
 
         $this->app->singleton(PermissionChecker::class);
 
@@ -59,6 +66,12 @@ final class PlatformGateServiceProvider extends ServiceProvider
             $app['config']->get('platform-gate.edge_secret'),
             $app['config']->get('platform-gate.edge_secret_next'),
             $app['config']->get('platform-gate.public_hosts'),
+            $app->make(LoggerInterface::class),
+        ));
+
+        // Igual que `EdgeTrust`: lo de cada pedido queda en sus atributos.
+        $this->app->singleton(RequestId::class, fn ($app) => new RequestId(
+            $app->make(EdgeTrust::class),
             $app->make(LoggerInterface::class),
         ));
 
@@ -102,6 +115,8 @@ final class PlatformGateServiceProvider extends ServiceProvider
             (bool) $app['config']->get('platform-gate.block_on_unreadable_kind', false),
             (bool) $app['config']->get('platform-gate.require_edge', false),
             (string) ($app['config']->get('platform-gate.public_url') ?: 'https://api.funnelchat.com'),
+            $app->make(RequestId::class),
+            $app->make(CreatedResourceContext::class),
         ));
     }
 
@@ -112,6 +127,10 @@ final class PlatformGateServiceProvider extends ServiceProvider
         ], 'platform-gate-config');
 
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([PurgeUsageCommand::class]);
+        }
 
         $this->app->make(Router::class)->aliasMiddleware('platform-gate', PlatformGate::class);
     }

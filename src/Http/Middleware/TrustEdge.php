@@ -6,6 +6,8 @@ namespace Funnelchat\PlatformGate\Http\Middleware;
 
 use Closure;
 use Funnelchat\PlatformGate\Edge\EdgeTrust;
+use Funnelchat\PlatformGate\Http\RequestId;
+use Illuminate\Container\Container;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -21,17 +23,34 @@ use Symfony\Component\HttpFoundation\Response;
  * Va al final y no al principio a propósito: el `TrustProxies` de Laravel mira el host
  * original para decidir en qué proxies confía (`*.on-vapor.com`, Laravel Cloud), y no tiene
  * que ver el ya reescrito.
+ *
+ * Desde 0.8 también decide el id del pedido (`RequestId`): así el log de todo el pedido lo
+ * lleva, y `X-Request-Id` sale en todas las respuestas del dominio —también un 500 o un 401
+ * que no pasaron por el portero—. Sólo si la respuesta no trae uno: en los pedidos que pasan
+ * por el portero, el portero ya puso el suyo, reemplazando el del dominio; en el resto, el
+ * del dominio se respeta.
  */
 final class TrustEdge
 {
-    public function __construct(private readonly EdgeTrust $edge)
+    private readonly RequestId $requestIds;
+
+    /** `RequestId` opcional (0.8): `new TrustEdge($edge)`, como en 0.7.1, lo toma del contenedor. */
+    public function __construct(private readonly EdgeTrust $edge, ?RequestId $requestIds = null)
     {
+        $this->requestIds = $requestIds ?? Container::getInstance()->make(RequestId::class);
     }
 
     public function handle(Request $request, Closure $next): Response
     {
         $this->edge->inspect($request);
+        $this->requestIds->for($request);
 
-        return $next($request);
+        return $this->requestIds->stampIfMissing($request, $next($request));
+    }
+
+    /** El pedido terminó: `request_id` sale del log. */
+    public function terminate(Request $request, Response $response): void
+    {
+        $this->requestIds->forgetFromLog($request);
     }
 }
