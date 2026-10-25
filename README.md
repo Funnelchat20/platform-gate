@@ -458,6 +458,38 @@ host interno y la IP del Worker.
 
 Todas llevan `X-Request-Id` (0.8).
 
+**El 403 `permission_denied` nombra el permiso como el panel** (0.8.1), nunca con el literal:
+
+```json
+{"error": "permission_denied", "message": "A esta API key le falta el permiso «Contactos y conversaciones → Enviar». Agregalo desde Desarrolladores, en el panel."}
+```
+
+Si el panel no nombra el permiso que pide la ruta, el mensaje es genérico: «A esta API key le
+falta un permiso que esta ruta pide. Revisá sus permisos en Desarrolladores, en el panel.» El
+literal sigue en `PermissionDenied::$requiredPermission`, para el código del dominio; no sale en
+la respuesta. Lo que el cliente machea es `error`, no el texto.
+
+La tabla está en un solo lugar, `PermissionLabels::for()`, para que un dominio que tenga sus
+propios mensajes nombre los permisos igual, sin copiarla:
+
+```php
+use Funnelchat\PlatformGate\Permissions\PermissionLabels;
+
+PermissionLabels::for('accounts:operate'); // 'Números de WhatsApp → Crear, conectar y borrar'
+PermissionLabels::for('accounts:send');    // null: el panel no lo ofrece
+```
+
+| Permiso | En el panel |
+|---|---|
+| `conversations:read` / `write` / `send` | Contactos y conversaciones → Ver / Editar / Enviar |
+| `communities:read` / `write` / `send` | Grupos y campañas → Ver / Editar / Enviar |
+| `communities:operate` | Grupos y campañas → Administrar grupos |
+| `accounts:read` / `write` | Números de WhatsApp → Ver / Editar |
+| `accounts:operate` | Números de WhatsApp → Crear, conectar y borrar |
+| `webhooks:read` / `write` | Avisos (webhooks) → Ver / Administrar |
+
+Con `null`, el texto es genérico; nunca se cae al literal.
+
 "No se pudo evaluar" incluye: el store del contador no responde, `kind` no se puede leer o
 tiene un valor desconocido, la lista de permisos de la key no se puede leer,
 `permission_prefix` no se puede leer o le da dos prefijos a la misma ruta, y la exigencia
@@ -470,6 +502,34 @@ La última es la que importa: si el store se cae, **corta, no deja pasar**. Deja
 cuando no se puede evaluar es el agujero clásico — el cliente automatizado se pasa del
 límite justo cuando el control no responde. Y "no pude evaluar" nunca se colapsa con
 "evalué y está denegado": son dos respuestas para el cliente y dos métricas para vos.
+
+---
+
+## Actualizar desde 0.8.0
+
+Versión **0.8.1**. Compatible: no hay que cambiar config ni código, sólo subir la versión.
+
+**Por qué.** El 25-10 (iniciativa api-abierta) se pidió que los nombres técnicos de los
+permisos —`accounts:operate`, `conversations:send`…— no aparezcan en ningún lado, tampoco en
+la API. Hasta 0.8.0 el 403 decía «Esta API key no tiene el permiso `conversations:send`.», y
+quien lo lee tiene que arreglarlo en Desarrolladores, en el panel, donde las claves se crean
+eligiendo un área y una casilla —«Contactos y conversaciones → Enviar»— y ese literal no
+aparece. El mensaje ahora dice lo mismo que el panel.
+
+**Qué cambia:**
+
+- El texto de `message` en el 403 `permission_denied`. Ver «Respuestas de rechazo». `error`, el
+  status y las cabeceras no cambian, y `PermissionDenied::$requiredPermission` sigue siendo el
+  literal.
+- `PermissionLabels::for()`, nuevo: el nombre de panel de cada permiso, o `null`.
+- Ningún otro texto de respuesta de la librería nombraba un permiso; no cambian.
+
+**Cómo subir.** Con `^0.8`, `composer update funnelchat20/platform-gate`. Los dominios suben en
+cualquier orden. Si un test del dominio compara el texto viejo del 403, que pase a comparar
+`error` —es lo estable— o el texto nuevo. Si el dominio tiene mensajes propios con el literal
+de un permiso, que los arme con `PermissionLabels::for()`.
+
+**Orden.** El portal, si muestra el texto del 403, lo actualiza cuando suba el primer dominio.
 
 ---
 
