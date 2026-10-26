@@ -11,6 +11,7 @@ use Funnelchat\PlatformGate\Webhooks\RetryPolicy;
 use Funnelchat\PlatformGate\Webhooks\Signature;
 use Funnelchat\PlatformGate\Webhooks\Subscription;
 use InvalidArgumentException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class EnvelopeTest extends TestCase
@@ -38,6 +39,31 @@ final class EnvelopeTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
 
         Event::make('message.received', ['contact' => ['name' => 'Edu', 'owner_id' => 1]]);
+    }
+
+    /** @return iterable<string, array{array<string, mixed>}> */
+    public static function payloadsWithWorkspace(): iterable
+    {
+        yield 'arriba de todo' => [['workspace_id' => 7, 'text' => 'hola']];
+        yield 'anidado' => [['contact' => ['name' => 'Edu', 'workspace_id' => 7]]];
+        yield 'dentro de una lista' => [['contacts' => [['name' => 'Edu'], ['name' => 'Ana', 'workspace_id' => 7]]]];
+        yield 'en mayúsculas' => [['contact' => ['Workspace_ID' => 7]]];
+        yield 'con null' => [['workspace_id' => null]];
+    }
+
+    /**
+     * El aviso no dice de qué workspace viene (Q7 de workspaces): la suscripción ya es de uno.
+     * La misma excepción que con `user_id`, a cualquier profundidad.
+     *
+     * @param array<string, mixed> $data
+     */
+    #[DataProvider('payloadsWithWorkspace')]
+    public function test_el_payload_tampoco_puede_llevar_el_workspace(array $data): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('no puede llevar');
+
+        Event::make('message.received', $data);
     }
 
     public function test_el_sobre_tiene_siempre_la_misma_forma(): void

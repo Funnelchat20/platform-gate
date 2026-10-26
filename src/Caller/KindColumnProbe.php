@@ -28,6 +28,9 @@ use Throwable;
  * Se resuelve una vez por proceso. Si el esquema no se puede consultar, la respuesta es
  * `null` — no sabemos — y el llamador decide; nunca se toma como "no existe", que sería
  * la lectura optimista.
+ *
+ * La misma pregunta vale para `workspace_id` (0.9), con la misma ventana: el paquete llega a
+ * los dominios antes que la columna de accounts. Por eso `columnExistsFor()`.
  */
 final class KindColumnProbe
 {
@@ -40,9 +43,14 @@ final class KindColumnProbe
 
     public function existsFor(object $token): ?bool
     {
+        return $this->columnExistsFor($token, 'kind');
+    }
+
+    public function columnExistsFor(object $token, string $column): ?bool
+    {
         $connection = method_exists($token, 'getConnectionName') ? $token->getConnectionName() : null;
         $table = method_exists($token, 'getTable') ? $token->getTable() : 'personal_access_tokens';
-        $key = ($connection ?? 'default').'.'.$table;
+        $key = ($connection ?? 'default').'.'.$table.'.'.$column;
 
         if (array_key_exists($key, $this->cache)) {
             return $this->cache[$key];
@@ -51,7 +59,7 @@ final class KindColumnProbe
         try {
             return $this->cache[$key] = $this->db->connection($connection)
                 ->getSchemaBuilder()
-                ->hasColumn($table, 'kind');
+                ->hasColumn($table, $column);
         } catch (Throwable) {
             return $this->cache[$key] = null;
         }

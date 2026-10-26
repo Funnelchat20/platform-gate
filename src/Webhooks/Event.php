@@ -30,12 +30,16 @@ use InvalidArgumentException;
  * código, mantener dos campos para siempre, o no migrar. Cuesta cero evitarlo hoy, así
  * que está prohibido acá y no en una guía de estilo.
  *
+ * **Tampoco `workspace_id`** (0.9). La suscripción es de un workspace y sólo le llegan los
+ * eventos de ése (Q7 de workspaces, 26-10): el aviso no dice de qué workspace viene. El
+ * dominio que emite declara el workspace por su canal interno, nunca en el sobre.
+ *
  * `version` es del TIPO de evento, no del sobre: permite que `message.received` evolucione
  * sin arrastrar a los demás.
  */
 final readonly class Event
 {
-    private const FORBIDDEN_KEYS = ['user_id', 'account_id', 'owner_id', 'tokenable_id'];
+    private const FORBIDDEN_KEYS = ['user_id', 'account_id', 'owner_id', 'tokenable_id', 'workspace_id'];
 
     public function __construct(
         public string $id,

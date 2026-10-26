@@ -25,6 +25,7 @@ use Funnelchat\PlatformGate\Usage\CreatedResourceContext;
 use Illuminate\Container\Container;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Laravel\Sanctum\TransientToken;
 use Psr\Log\LoggerInterface;
@@ -41,6 +42,10 @@ use Throwable;
  */
 final class PlatformGate
 {
+    private const WORKSPACE_HEADER = 'X-Workspace-Id';
+
+    private const WORKSPACE_SERVER_KEY = 'HTTP_X_WORKSPACE_ID';
+
     private ?float $startedAt = null;
 
     private ?string $keyIdForLog = null;
@@ -256,6 +261,10 @@ final class PlatformGate
 
         $required = $this->routes->requiredFor($request);
         $this->permissions->assert($token, $required);
+
+        // Antes del tope: un 503 por no poder leer el workspace no le gasta una llamada a nadie.
+        $workspaceId = $this->readWorkspace($token);
+
         $this->cap->consume($keyId);
 
         // La misma lista con la que se acaba de evaluar, leída de la misma forma: el
@@ -265,7 +274,102 @@ final class PlatformGate
             $accountId,
             $isOwner,
             $this->permissions->abilitiesOf($token),
+            $workspaceId,
         ));
+
+        $this->pinWorkspaceHeader($request, $workspaceId);
+    }
+
+    /**
+     * El workspace de una key no lo elige el cliente (Q12 de workspaces, 26-10): el
+     * `X-Workspace-Id` que mandó se reemplaza por el de la key, o se quita si la key no tiene
+     * uno. Quitarlo es lo obligatorio; fijarlo es para que el dominio pueda seguir leyendo el
+     * header por el mismo camino que el panel (Q17).
+     *
+     * Sólo para keys, y sólo cuando la llamada pasa: a una sesión web no se le toca, y una
+     * rechazada no llega al dominio. Lo que corrió antes del portero ya leyó lo del cliente:
+     * por eso el orden de middlewares es cosa de cada dominio (ver el README).
+     */
+    private function pinWorkspaceHeader(Request $request, ?int $workspaceId): void
+    {
+        if ($workspaceId === null) {
+            $request->headers->remove(self::WORKSPACE_HEADER);
+            $request->server->remove(self::WORKSPACE_SERVER_KEY);
+
+            return;
+        }
+
+        $request->headers->set(self::WORKSPACE_HEADER, (string) $workspaceId);
+        $request->server->set(self::WORKSPACE_SERVER_KEY, (string) $workspaceId);
+    }
+
+    /**
+     * Lee `workspace_id` del token de una key. `null` es un valor válido —la key es del por
+     * defecto— y por eso no alcanza con mirar si llegó vacío: hay que saber si el modelo lo
+     * cargó.
+     *
+     *   - Cargado, con un id: ése. Vacío o `null`: `null`.
+     *   - No cargado y la columna **no existe**: ventana de rollout —accounts todavía no la
+     *     creó, y hasta entonces todas las keys son del por defecto—. `null`.
+     *   - No cargado y la columna existe, o el esquema no se puede consultar: el dominio no la
+     *     selecciona (`findToken()` con columnas fijas). Tomarlo como `null` dejaría a una key
+     *     de otro workspace operar en el por defecto sin ninguna señal. 503.
+     *   - Cargado con algo que no es un id: no se sabe de qué workspace es. 503.
+     */
+    private function readWorkspace(object $token): ?int
+    {
+        try {
+            $loaded = $token instanceof Model
+                ? array_key_exists('workspace_id', $token->getAttributes())
+                : isset($token->workspace_id);
+
+            $raw = $loaded ? $token->workspace_id : null;
+        } catch (Throwable $e) {
+            $this->logger->error('platform-gate: no se pudo leer `workspace_id` del token', [
+                'token_model' => $token::class,
+                'exception' => $e->getMessage(),
+            ]);
+
+            throw new GateUnavailable('unreadable_workspace', $e);
+        }
+
+        if (! $loaded) {
+            $columnExists = $this->kindColumn->columnExistsFor($token, 'workspace_id');
+
+            if ($columnExists === false) {
+                return null;
+            }
+
+            $this->logger->error(
+                'platform-gate: el token de una key no trae `workspace_id` y la columna existe (o no se '
+                .'pudo consultar el esquema): no se sabe de qué workspace es la key. Revisá si el modelo '
+                .'sobreescribe `findToken()` con una lista fija de columnas.',
+                ['token_model' => $token::class, 'column_exists' => $columnExists]
+            );
+
+            throw new GateUnavailable('unreadable_workspace');
+        }
+
+        if ($raw === null || $raw === '') {
+            return null;
+        }
+
+        // Un id positivo, entero o el string que devuelve el driver. Lo que no entra en un int
+        // tampoco es un id.
+        $id = is_int($raw) || is_string($raw)
+            ? filter_var($raw, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]])
+            : false;
+
+        if ($id !== false) {
+            return $id;
+        }
+
+        $this->logger->error('platform-gate: `workspace_id` del token no es un id', [
+            'token_model' => $token::class,
+            'type' => get_debug_type($raw),
+        ]);
+
+        throw new GateUnavailable('unreadable_workspace');
     }
 
     /**
