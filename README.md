@@ -20,6 +20,7 @@ Cuatro preguntas en cada request: **¿quién sos?**, **¿podés?**, **¿te pasas
 | Escribe una fila por llamada, con su id de pedido y lo que creó, y la purga a los 90 días | Emitir, validar o revocar keys |
 | Devuelve `X-Request-Id` en cada respuesta | Leer el registro: se consulta por SQL |
 | Reconoce lo que llega por el borde (`api.funnelchat.com`) y le cree host e IP | Rutear entre dominios — eso es el Worker |
+| Le dice al dominio de qué workspace es la key, y reemplaza el `X-Workspace-Id` que mande una key | Filtrar por workspace: eso lo hace cada dominio con lo que el portero le deja |
 
 Los frenos de envío viven en la costura de salida de cada aplicación, no acá y no en la
 ruta: desde la tabla de rutas no se pueden enumerar los caminos de envío, porque hay rutas
@@ -79,7 +80,8 @@ use Illuminate\Http\Request;
 ```
 
 `PlatformGate` tiene que correr **después** de `auth:sanctum` —necesita el token resuelto— y
-**antes** de cualquier cosa de la aplicación que pregunte quién llama.
+**antes** de cualquier cosa de la aplicación que pregunte quién llama o lea `X-Workspace-Id`
+(ver «El workspace de una key»).
 
 **`PlatformGate` va como middleware de ruta** —en el grupo `api`, como arriba—, **nunca
 global**. Lo global es `TrustEdge`. El portero necesita la ruta resuelta para saber qué permiso
@@ -196,19 +198,23 @@ leer (la columna no se selecciona, el valor no es una lista), responde 503
 `gate_unavailable`: no pudo evaluar, y no deja pasar. La misma lista es la que el dominio
 ve en `Caller::$permissions`.
 
-### Si tu aplicación restringe columnas en `findToken()`, incluí `kind` y `abilities`
+### Si tu aplicación restringe columnas en `findToken()`, incluí `kind`, `abilities` y `workspace_id`
 
 Una aplicación puede sobreescribir `findToken()` en su modelo `PersonalAccessToken` para
 traer sólo algunas columnas. Si `kind` no está en esa lista, el atributo llega `null` y el
 portero no puede clasificar al llamador. Si falta `abilities`, no puede evaluar los
-permisos de una key, y corta con 503.
+permisos de una key, y corta con 503. Si falta `workspace_id` y la columna existe en la
+tabla, no sabe de qué workspace es la key, y también corta con 503 (0.9).
 
 ```php
 protected static array $selectColumns = [
     'id', 'tokenable_type', 'tokenable_id', 'token', 'abilities', 'expires_at',
-    'kind',
+    'kind', 'workspace_id',
 ];
 ```
+
+`workspace_id` va en la lista **recién cuando la columna existe**: la crea accounts. Pedir una
+columna que no existe rompe la consulta de cada token.
 
 El comportamiento cuando `kind` no se puede leer lo decide `PLATFORM_GATE_BLOCK_ON_UNREADABLE_KIND`.
 En `true`, un token cuyo `kind` no se puede leer devuelve 503 en vez de seguir. Ponelo en
@@ -244,11 +250,56 @@ $failClosed = match ($caller->kind) {
 ```
 
 `$caller->toArray()` / `Caller::fromArray()` para propagarlo a un job de cola: un job que
-produce efectos externos tiene que poder saber que lo originó una key.
+produce efectos externos tiene que poder saber que lo originó una key, y de qué workspace.
 
 **Nada de esto se expone al cliente.** Ni el `kind`, ni el `key_id`, ni ningún
 identificador de cuenta — ni en respuestas, ni en headers, ni en webhooks. Lo único que el
 portero le agrega a la respuesta es `X-Request-Id`, un id al azar del pedido.
+
+### El workspace de una key
+
+Cada key es de un workspace, y el cliente no lo elige (0.9). Llega al dominio por dos lados,
+que dicen lo mismo:
+
+```php
+$workspaceId = app(CallerContext::class)->get()->workspaceId(); // ?int
+```
+
+| Llamador | `workspaceId()` | `X-Workspace-Id` que ve el dominio |
+|---|---|---|
+| Key con workspace (`workspace_id = 7` en el token) | `7` | `7`, mande lo que mande el cliente |
+| Key sin workspace (`null` o vacío en el token, o la columna todavía no existe) | `null` | ninguno: se quita el que mandó el cliente |
+| Sesión web | `null` | el suyo, intacto |
+| Sin token | `null` | el suyo, intacto (el 401 lo da `auth:sanctum`) |
+
+**`null` en una key es el workspace por defecto de la cuenta.** El dominio lo resuelve como
+lo resuelve el panel sin header. No es «todos los workspaces» ni «la unión de la cuenta».
+
+**En la sesión web no significa nada:** su workspace lo sigue diciendo su header, como antes.
+`workspaceId()` sólo habla de keys.
+
+**El header se reemplaza dentro del portero, justo antes de pasarle el pedido al dominio**, y
+sólo si la llamada pasó: un rechazo no llega al dominio. Lo que corrió **antes** del portero ya
+leyó el header del cliente:
+
+- un middleware **global** que lea `X-Workspace-Id` lo ve sin reemplazar, siempre: lo global
+  corre antes que lo de ruta, y el portero es de ruta;
+- uno del grupo `api` o de la ruta lo ve reemplazado sólo si queda **después** del portero. Un
+  `appendToGroup('api', …)` posterior al del portero, o un middleware de ruta, quedan después;
+  ojo con la lista de prioridad de Laravel, que puede reordenarlos;
+- lo que se resuelva y se guarde antes —un singleton que lee el header al construirse, un
+  service provider— también queda con el del cliente.
+
+La prueba que lo confirma es del dominio, por el kernel HTTP de verdad: una key de workspace A
+que manda `X-Workspace-Id: B` tiene que operar en A.
+
+**En un job no hay header:** el workspace viaja en `toArray()` / `fromArray()`. Un array de 0.8.x
+—un job encolado antes de subir— se lee con `null`, o sea el por defecto.
+
+Si el token de una key no trae `workspace_id` y la columna **existe**, o trae algo que no es un
+id, el portero no sabe de qué workspace es la key: responde 503 `gate_unavailable` y lo deja en
+el log. No la manda al por defecto, porque una key de otro workspace operaría ahí sin ninguna
+señal.
 
 ---
 
@@ -491,7 +542,8 @@ PermissionLabels::for('accounts:send');    // null: el panel no lo ofrece
 Con `null`, el texto es genérico; nunca se cae al literal.
 
 "No se pudo evaluar" incluye: el store del contador no responde, `kind` no se puede leer o
-tiene un valor desconocido, la lista de permisos de la key no se puede leer,
+tiene un valor desconocido, la lista de permisos de la key no se puede leer, el workspace de
+la key no se puede leer (0.9),
 `permission_prefix` no se puede leer o le da dos prefijos a la misma ruta, y la exigencia
 del borde está encendida sin ningún secreto configurado.
 
@@ -502,6 +554,60 @@ La última es la que importa: si el store se cae, **corta, no deja pasar**. Deja
 cuando no se puede evaluar es el agujero clásico — el cliente automatizado se pasa del
 límite justo cuando el control no responde. Y "no pude evaluar" nunca se colapsa con
 "evalué y está denegado": son dos respuestas para el cliente y dos métricas para vos.
+
+---
+
+## Actualizar desde 0.8
+
+Versión **0.9.0**. Cambia lo que el dominio recibe en las llamadas con key: hay que revisar tres
+cosas antes de subir (abajo). Sin cambios de config ni migraciones del paquete.
+
+**Por qué.** Workspaces está en production, en beta privada. El 26-10 (iniciativa api-abierta)
+se decidió que **cada API key es de un workspace** y que el `X-Workspace-Id` que mande una key
+**no elige nada** (Q5 y Q12 de `DECISIONES-workspaces-2026-10-26.md`, en el repo de
+coordinación). Hasta 0.8.x una key no tenía workspace, y los tres dominios procesaban su header
+igual que el de una sesión: el cliente elegía el workspace. Además, sin header cada dominio hacía
+algo distinto (el por defecto, la unión de la cuenta, el activo). El portero es lo único por lo
+que pasan las llamadas con key de todos los dominios, así que es quien le lleva el workspace de la
+key al dominio, también a lo que el dominio encola. Y el aviso no dice de qué workspace viene
+(Q7): la suscripción ya es de uno. Contrato `1026-workspaces-api` v0.1, sección P.
+
+**Qué cambia:**
+
+- `Caller::workspaceId(): ?int`, nuevo: el `workspace_id` del token de la key; `null` si no tiene
+  uno, y para cualquier llamador que no sea key. `Caller::apiKey()` acepta `?int $workspaceId`
+  como último argumento, opcional. Ver «El workspace de una key».
+- `toArray()` lleva `workspace_id`; `fromArray()` lo lee, y un array de 0.8.x sale con `null`.
+- **El `X-Workspace-Id` de una llamada con key** llega al dominio con el workspace de la key, o
+  sin header si la key no tiene uno. El de una sesión web no se toca.
+- **503 `gate_unavailable` nuevo:** cuando la columna `workspace_id` existe y el token de la key
+  no la trae, o trae algo que no es un id. Mientras la columna no exista, la key es del por
+  defecto y pasa.
+- **`Event` rechaza `workspace_id` en `data`**, a cualquier profundidad, con la misma excepción
+  que `user_id`.
+- No cambian el tope diario, `api_call_log`, los permisos ni el `key_id`.
+
+**Antes de subir, en el dominio:**
+
+1. **Ningún evento lleva `workspace_id` en `data`.** Si alguno lo lleva, con 0.9 construir el
+   `Event` tira y el aviso no sale. El workspace del evento va por el canal interno, no en el
+   sobre.
+2. **El orden de middlewares:** nada que lea `X-Workspace-Id` corre antes del portero. Ver «El
+   workspace de una key», con la prueba que lo confirma.
+3. **`findToken()` con columnas fijas:** agregar `workspace_id` cuando la columna exista en la
+   base de ese ambiente. Si la columna existe y no está en la lista, cada llamada con key da 503.
+
+**Cómo subir.** Cambiar la restricción a `^0.9` —`^0.8` no la toma— y
+`composer update funnelchat20/platform-gate`.
+
+**Orden** (el del contrato):
+
+1. Se publica 0.9.0. Nadie cambia hasta subir.
+2. accounts crea la columna `personal_access_tokens.workspace_id`, con cada key existente en el
+   workspace por defecto de su dueño.
+3. conversations y communities suben y limitan cada llamada con key a su workspace.
+4. accounts sube y empieza a crear keys en cualquier workspace del dueño. Recién desde acá hay
+   keys fuera del por defecto: un dominio que no subió sigue dejando que el header elija.
 
 ---
 
@@ -858,7 +964,7 @@ arrastrar a los demás.
 | Regla | Cómo se hace cumplir |
 |---|---|
 | `recurso.hecho_en_pasado`, minúsculas | `EventName::from()` tira si no machea |
-| **Sin `user_id`, `account_id`, `owner_id`, `tokenable_id`** en `data`, ni anidados | El constructor de `Event` recorre el payload y tira |
+| **Sin `user_id`, `account_id`, `owner_id`, `tokenable_id`, `workspace_id`** en `data`, ni anidados | El constructor de `Event` recorre el payload y tira |
 | Esa lista es un **piso, no un techo** | Cada aplicación agrega la suya y la hace cumplir con su propio test |
 | Firma `t=…,v1=…` sobre `t + "." + cuerpo` | `Signature` — el timestamp va adentro de lo firmado; si no, una entrega capturada se reenvía para siempre |
 | Verificación en tiempo constante | `hash_equals`, con ventana de tolerancia de 5 min |

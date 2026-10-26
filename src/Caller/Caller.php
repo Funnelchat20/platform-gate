@@ -45,19 +45,34 @@ final readonly class Caller
          * @var list<string>
          */
         public array $permissions = [],
+        /** Ver `workspaceId()`. Sólo una key lo trae: las fábricas de web y no verificado no lo reciben. */
+        private ?int $workspaceId = null,
     ) {
     }
 
     /** @param list<string> $permissions */
-    public static function apiKey(string $keyId, ?int $accountId, bool $accountIsOwner, array $permissions = []): self
+    public static function apiKey(string $keyId, ?int $accountId, bool $accountIsOwner, array $permissions = [], ?int $workspaceId = null): self
     {
-        return new self(CallerKind::ApiKey, $keyId, $accountId, $accountIsOwner, $permissions);
+        return new self(CallerKind::ApiKey, $keyId, $accountId, $accountIsOwner, $permissions, $workspaceId);
     }
 
     /** ¿La key trae este permiso? El portero ya validó el de la ruta; esto es para ramificar. */
     public function can(string $permission): bool
     {
         return in_array($permission, $this->permissions, true);
+    }
+
+    /**
+     * El workspace de la key (0.9): cada key es de un workspace, y el `X-Workspace-Id` que mande
+     * el cliente no lo elige —el portero ya lo reemplazó por éste—.
+     *
+     * `null` en dos casos que el dominio no tiene que distinguir: una key sin workspace, que es
+     * del **por defecto** de la cuenta, y cualquier llamador que no sea key. La sesión web sigue
+     * con su mecanismo de siempre: su workspace lo dice su header, no esto.
+     */
+    public function workspaceId(): ?int
+    {
+        return $this->workspaceId;
     }
 
     public static function web(?int $accountId, bool $accountIsOwner): self
@@ -70,7 +85,7 @@ final readonly class Caller
         return new self(CallerKind::Unverified, null, null, false);
     }
 
-    /** @return array{kind: string, key_id: string|null, account_id: int|null, account_is_owner: bool} */
+    /** @return array{kind: string, key_id: string|null, account_id: int|null, account_is_owner: bool, permissions: list<string>, workspace_id: int|null} */
     public function toArray(): array
     {
         return [
@@ -79,18 +94,28 @@ final readonly class Caller
             'account_id' => $this->accountId,
             'account_is_owner' => $this->accountIsOwner,
             'permissions' => $this->permissions,
+            'workspace_id' => $this->workspaceId,
         ];
     }
 
-    /** @param array{kind: string, key_id?: string|null, account_id?: int|null, account_is_owner?: bool, permissions?: list<string>} $data */
+    /**
+     * Un array de 0.8.x —un job que se encoló antes de subir— no trae `workspace_id` y se lee
+     * con `null`, o sea el por defecto. Fuera de una key se descarta aunque venga: lo que no es
+     * key no tiene workspace propio.
+     *
+     * @param array{kind: string, key_id?: string|null, account_id?: int|null, account_is_owner?: bool, permissions?: list<string>, workspace_id?: int|null} $data
+     */
     public static function fromArray(array $data): self
     {
+        $kind = CallerKind::from($data['kind']);
+
         return new self(
-            CallerKind::from($data['kind']),
+            $kind,
             $data['key_id'] ?? null,
             $data['account_id'] ?? null,
             $data['account_is_owner'] ?? false,
             $data['permissions'] ?? [],
+            $kind === CallerKind::ApiKey ? ($data['workspace_id'] ?? null) : null,
         );
     }
 }
