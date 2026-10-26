@@ -56,11 +56,43 @@ final class PermissionPrefixTest extends GateTestCase
         $this->assertRejected($response, 403, $error);
     }
 
-    public function test_el_403_nombra_el_permiso_declarado(): void
+    public function test_el_403_nombra_el_permiso_declarado_como_el_panel(): void
     {
+        // El permiso que pide la ruta es el del prefijo declarado, no el del dominio: el 403
+        // nombra la casilla de webhooks, no una de «Números de WhatsApp».
         $response = $this->send('POST', 'api/v1/webhooks', $this->token(['kind' => 'api_key', 'abilities' => ['accounts:write']]));
 
-        $this->assertStringContainsString('`webhooks:write`', (string) $response->getContent());
+        $this->assertRejected($response, 403, 'permission_denied');
+        $this->assertSame([
+            'error' => 'permission_denied',
+            'message' => 'A esta API key le falta el permiso «Avisos (webhooks) → Administrar». '
+                .'Agregalo desde Desarrolladores, en el panel.',
+        ], json_decode((string) $response->getContent(), true));
+        $this->assertNoPermissionLiteral($response->getContent());
+    }
+
+    public function test_el_403_de_un_permiso_que_el_panel_no_nombra_es_generico(): void
+    {
+        // `webhooks:send` no es una casilla del panel.
+        $response = $this->send('POST', 'api/v1/webhooks/{webhook}/test', $this->token(['kind' => 'api_key', 'abilities' => ['webhooks:write']]));
+
+        $this->assertRejected($response, 403, 'permission_denied');
+        $this->assertSame([
+            'error' => 'permission_denied',
+            'message' => 'A esta API key le falta un permiso que esta ruta pide. Revisá sus permisos en Desarrolladores, en el panel.',
+        ], json_decode((string) $response->getContent(), true));
+        $this->assertNoPermissionLiteral($response->getContent());
+    }
+
+    /** Ni el permiso que faltaba ni ningún otro literal `{prefijo}:{grado}`, ni crudo ni escapado. */
+    private function assertNoPermissionLiteral(string|false $body): void
+    {
+        $body = (string) $body;
+        $decoded = json_encode(json_decode($body, true), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        foreach ([$body, (string) $decoded] as $text) {
+            $this->assertDoesNotMatchRegularExpression('/[a-z0-9-]+:(read|write|send|operate)\b/', $text);
+        }
     }
 
     public function test_declarar_un_prefijo_no_abre_superficie(): void
