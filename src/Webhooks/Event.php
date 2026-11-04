@@ -30,16 +30,19 @@ use InvalidArgumentException;
  * código, mantener dos campos para siempre, o no migrar. Cuesta cero evitarlo hoy, así
  * que está prohibido acá y no en una guía de estilo.
  *
- * **Tampoco `workspace_id`** (0.9). La suscripción es de un workspace y sólo le llegan los
- * eventos de ése (Q7 de workspaces, 26-10): el aviso no dice de qué workspace viene. El
- * dominio que emite declara el workspace por su canal interno, nunca en el sobre.
+ * **`workspace_id` sí puede ir** (0.9.1). En 0.9.0 estaba prohibido: la Q7 de workspaces
+ * (26-10) decía que el aviso no dice de qué workspace viene. El 04-11 la Q35 la cambió: los
+ * avisos públicos dicen de qué workspace vienen —el workspace al que se rutea el aviso—, y
+ * accounts lo pone en todos. La suscripción sigue siendo de un workspace y sigue recibiendo
+ * sólo los suyos; el campo informa, no elige. Es el identificador al que se está migrando,
+ * no uno de los internos de cuenta de arriba.
  *
  * `version` es del TIPO de evento, no del sobre: permite que `message.received` evolucione
  * sin arrastrar a los demás.
  */
 final readonly class Event
 {
-    private const FORBIDDEN_KEYS = ['user_id', 'account_id', 'owner_id', 'tokenable_id', 'workspace_id'];
+    private const FORBIDDEN_KEYS = ['user_id', 'account_id', 'owner_id', 'tokenable_id'];
 
     public function __construct(
         public string $id,

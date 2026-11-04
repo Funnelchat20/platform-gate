@@ -52,13 +52,41 @@ final class EnvelopeTest extends TestCase
     }
 
     /**
-     * El aviso no dice de qué workspace viene (Q7 de workspaces): la suscripción ya es de uno.
-     * La misma excepción que con `user_id`, a cualquier profundidad.
+     * El aviso dice de qué workspace viene (Q35 de workspaces, 04-11, que cambió la Q7 del
+     * 26-10): `workspace_id` pasa a cualquier profundidad y llega intacto en el sobre. En 0.9.0
+     * esto tiraba, y los avisos `mac.usage_*` de accounts se descartaban.
      *
      * @param array<string, mixed> $data
      */
     #[DataProvider('payloadsWithWorkspace')]
-    public function test_el_payload_tampoco_puede_llevar_el_workspace(array $data): void
+    public function test_el_payload_puede_llevar_el_workspace(array $data): void
+    {
+        $event = Event::make('message.received', $data);
+
+        $this->assertSame($data, $event->toArray()['data']);
+    }
+
+    /** @return iterable<string, array{array<string, mixed>}> */
+    public static function payloadsWithAccountIdentifiers(): iterable
+    {
+        foreach (['user_id', 'account_id', 'owner_id', 'tokenable_id'] as $key) {
+            yield "{$key} arriba de todo" => [[$key => 7, 'text' => 'hola']];
+            yield "{$key} anidado" => [['contact' => ['name' => 'Edu', $key => 7]]];
+            yield "{$key} dentro de una lista" => [['contacts' => [['name' => 'Edu'], ['name' => 'Ana', $key => 7]]]];
+            yield "{$key} en mayúsculas" => [['contact' => [strtoupper($key) => 7]]];
+            yield "{$key} con null" => [[$key => null]];
+            yield "{$key} junto al workspace" => [['workspace_id' => 7, 'contact' => [$key => 7]]];
+        }
+    }
+
+    /**
+     * Abrir `workspace_id` no abre nada más: los cuatro identificadores internos de cuenta
+     * siguen tirando, a cualquier profundidad y aunque el payload traiga también el workspace.
+     *
+     * @param array<string, mixed> $data
+     */
+    #[DataProvider('payloadsWithAccountIdentifiers')]
+    public function test_los_identificadores_de_cuenta_siguen_prohibidos(array $data): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('no puede llevar');
