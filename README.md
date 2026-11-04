@@ -557,6 +557,38 @@ límite justo cuando el control no responde. Y "no pude evaluar" nunca se colaps
 
 ---
 
+## Actualizar desde 0.9.0
+
+Versión **0.9.1**. Compatible: no hay que cambiar config ni código, sólo subir la versión.
+
+**Por qué.** 0.9.0 hizo que `Event` rechazara `workspace_id` en `data`, por la Q7 de workspaces
+(26-10, iniciativa api-abierta): «el aviso no dice de qué workspace viene». El 04-11 la Q35
+cambió esa decisión (`DECISIONES-workspaces`, en el repo de coordinación):
+
+> **Cambia la Q7: los avisos dicen de qué workspace vienen.** `data.workspace_id` deja de estar
+> prohibido en el portero, y accounts lo pone en todos los avisos públicos, con el workspace al
+> que se rutea el aviso. La suscripción sigue siendo de un workspace y sigue recibiendo solo los
+> suyos.
+
+Lo que lo hizo urgente: accounts ya publicaba `data.workspace_id` en `mac.usage_80` y
+`mac.usage_100`. Con 0.9.0 esos avisos se descartaban, y `GET webhooks/events` y el OpenAPI de
+accounts respondían 500.
+
+**Qué cambia:**
+
+- `Event` acepta `workspace_id` en `data`, a cualquier profundidad. Llega al cliente tal cual.
+- `user_id`, `account_id`, `owner_id` y `tokenable_id` siguen prohibidos, igual que antes, también
+  cuando el payload trae `workspace_id`.
+- Nada más: ni el sobre, ni la firma, ni `Caller`, ni el `X-Workspace-Id` de las llamadas con key.
+
+**Cómo subir.** Con `^0.9`, `composer update funnelchat20/platform-gate`. Un dominio que todavía
+está en 0.8.x sube directo a 0.9.1, siguiendo «Actualizar desde 0.8» salvo su punto 1.
+
+**Orden.** No hay uno obligatorio: el cambio sólo deja pasar lo que antes tiraba. accounts sube
+primero, porque es el que ya emite avisos con `workspace_id`; los demás, cuando les toque.
+
+---
+
 ## Actualizar desde 0.8
 
 Versión **0.9.0**. Cambia lo que el dominio recibe en las llamadas con key: hay que revisar tres
@@ -584,14 +616,14 @@ key al dominio, también a lo que el dominio encola. Y el aviso no dice de qué 
   no la trae, o trae algo que no es un id. Mientras la columna no exista, la key es del por
   defecto y pasa.
 - **`Event` rechaza `workspace_id` en `data`**, a cualquier profundidad, con la misma excepción
-  que `user_id`.
+  que `user_id`. **Revertido en 0.9.1**: ver «Actualizar desde 0.9.0».
 - No cambian el tope diario, `api_call_log`, los permisos ni el `key_id`.
 
 **Antes de subir, en el dominio:**
 
-1. **Ningún evento lleva `workspace_id` en `data`.** Si alguno lo lleva, con 0.9 construir el
+1. **Ningún evento lleva `workspace_id` en `data`.** Si alguno lo lleva, con 0.9.0 construir el
    `Event` tira y el aviso no sale. El workspace del evento va por el canal interno, no en el
-   sobre.
+   sobre. **No aplica desde 0.9.1**, que lo deja pasar: subí directo a 0.9.1.
 2. **El orden de middlewares:** nada que lea `X-Workspace-Id` corre antes del portero. Ver «El
    workspace de una key», con la prueba que lo confirma.
 3. **`findToken()` con columnas fijas:** agregar `workspace_id` cuando la columna exista en la
@@ -964,7 +996,8 @@ arrastrar a los demás.
 | Regla | Cómo se hace cumplir |
 |---|---|
 | `recurso.hecho_en_pasado`, minúsculas | `EventName::from()` tira si no machea |
-| **Sin `user_id`, `account_id`, `owner_id`, `tokenable_id`, `workspace_id`** en `data`, ni anidados | El constructor de `Event` recorre el payload y tira |
+| **Sin `user_id`, `account_id`, `owner_id`, `tokenable_id`** en `data`, ni anidados | El constructor de `Event` recorre el payload y tira |
+| `workspace_id` **sí** puede ir en `data` (0.9.1): dice a qué workspace se ruteó el aviso | No se valida; la suscripción sigue siendo de un workspace |
 | Esa lista es un **piso, no un techo** | Cada aplicación agrega la suya y la hace cumplir con su propio test |
 | Firma `t=…,v1=…` sobre `t + "." + cuerpo` | `Signature` — el timestamp va adentro de lo firmado; si no, una entrega capturada se reenvía para siempre |
 | Verificación en tiempo constante | `hash_equals`, con ventana de tolerancia de 5 min |
