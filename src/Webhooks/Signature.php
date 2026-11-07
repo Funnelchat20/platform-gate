@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Funnelchat\PlatformGate\Webhooks;
 
+use Funnelchat\PlatformGate\Http\RequestId;
+
 /**
  * Cómo se firma un evento, y cómo lo verifica el que lo recibe.
  *
@@ -26,6 +28,21 @@ final readonly class Signature
     public const EVENT_HEADER = 'X-Funnelchat-Event';
 
     public const DELIVERY_HEADER = 'X-Funnelchat-Delivery';
+
+    /**
+     * Un UUID distinto por cada INTENTO de entrega (0.10), no por evento: dos intentos del
+     * mismo evento llevan dos valores distintos a propósito.
+     *
+     * `Event::$id` (`evt_…`) ya identifica el evento; lo que faltaba era identificar el
+     * intento HTTP concreto para que quien recibe pueda deduplicar sus propios reintentos
+     * sin apoyarse en el id de un recurso interno — que puede repetirse entre tipos de
+     * evento del mismo mensaje (`message.sent` y `message.delivered` comparten el id del
+     * mensaje, por ejemplo).
+     *
+     * Quien despacha —cada dominio; el transporte no vive acá— llama a `newIdempotencyKey()`
+     * una vez por intento y manda el valor acá.
+     */
+    public const IDEMPOTENCY_HEADER = 'X-Idempotency-Key';
 
     /** Tolerancia por default, en segundos. Cubre un reloj corrido y una cola lenta. */
     public const DEFAULT_TOLERANCE = 300;
@@ -75,5 +92,15 @@ final readonly class Signature
             hash_hmac('sha256', "{$timestamp}.{$payload}", $this->secret),
             $parts['v1']
         );
+    }
+
+    /**
+     * El valor de `X-Idempotency-Key` para UN intento. UUID v4; mismo generador que
+     * `RequestId`, para no reinventarlo — acá no es "el id del pedido", es "el id de este
+     * intento de entrega", así que vive en `Webhooks`, no en `Http`.
+     */
+    public static function newIdempotencyKey(): string
+    {
+        return RequestId::generate();
     }
 }

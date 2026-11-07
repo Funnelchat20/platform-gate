@@ -10,7 +10,9 @@ two jobs and nothing else:
   writes one `api_call_log` row per call. It reads `personal_access_tokens` directly, with no cache, so a
   revoked key fails on the next request.
 - **The webhook standard:** `Event` (envelope `{id, type, version, occurred_at, data}`), `EventName`,
-  `Signature` (`X-Funnelchat-Signature: t=…,v1=…`) and `RetryPolicy`.
+  `Signature` (`X-Funnelchat-Signature: t=…,v1=…`, plus `X-Idempotency-Key` per delivery attempt since 0.10)
+  and `RetryPolicy`. `DeliveryCircuitBreaker` (0.10, off by default) pauses a subscription that fails
+  systematically, using the shared cache store with TTL — no table, no migration.
 
 It is **not** a domain: no database of its own, no container, no routes, no queues. In the workspace map it is
 a **component** (`kind: library`): work arrives through `fcdev delegate platform-gate` in an isolated worktree,

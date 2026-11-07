@@ -16,6 +16,7 @@ use Funnelchat\PlatformGate\Permissions\PermissionChecker;
 use Funnelchat\PlatformGate\Permissions\RoutePermissions;
 use Funnelchat\PlatformGate\Usage\ApiCallRecorder;
 use Funnelchat\PlatformGate\Usage\CreatedResourceContext;
+use Funnelchat\PlatformGate\Webhooks\DeliveryCircuitBreaker;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Routing\Router;
@@ -88,6 +89,14 @@ final class PlatformGateServiceProvider extends ServiceProvider
             $app->make(CacheFactory::class)->store($app['config']->get('platform-gate.cache_store')),
             (int) $app['config']->get('platform-gate.daily_call_cap', 0),
             (array) $app['config']->get('platform-gate.daily_call_cap_overrides', []),
+        ));
+
+        $this->app->singleton(DeliveryCircuitBreaker::class, fn ($app) => new DeliveryCircuitBreaker(
+            $app->make(CacheFactory::class)->store($app['config']->get('platform-gate.cache_store')),
+            (bool) $app['config']->get('platform-gate.webhook_circuit_breaker.enabled', false),
+            (int) $app['config']->get('platform-gate.webhook_circuit_breaker.failure_threshold', 10),
+            (int) $app['config']->get('platform-gate.webhook_circuit_breaker.window_seconds', 3600),
+            (int) $app['config']->get('platform-gate.webhook_circuit_breaker.pause_seconds', 1800),
         ));
 
         $this->app->singleton(ApiCallRecorder::class, fn ($app) => new ApiCallRecorder(

@@ -195,4 +195,26 @@ final class EnvelopeTest extends TestCase
         $this->assertSame(1800, $policy->delayAfter(3));
         $this->assertNull($policy->delayAfter(4));
     }
+
+    public function test_el_header_de_idempotencia_es_el_que_documenta_el_contrato(): void
+    {
+        $this->assertSame('X-Idempotency-Key', Signature::IDEMPOTENCY_HEADER);
+    }
+
+    /**
+     * Cada INTENTO lleva su propia key: dos llamadas (dos intentos del mismo evento, en la
+     * práctica) no pueden coincidir, porque lo que el receptor necesita es distinguir sus
+     * propios reintentos, no el evento —eso ya lo identifica `Event::$id`—.
+     */
+    public function test_cada_intento_de_entrega_tiene_su_propia_key_de_idempotencia(): void
+    {
+        $first = Signature::newIdempotencyKey();
+        $second = Signature::newIdempotencyKey();
+
+        $this->assertNotSame($first, $second);
+        $this->assertMatchesRegularExpression(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/',
+            $first,
+        );
+    }
 }

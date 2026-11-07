@@ -246,4 +246,34 @@ return [
     */
     'account_resolver' => null,
 
+    /*
+    |---------------------------------------------------------------------------
+    | Circuit breaker de webhooks — pausa automática (0.10)
+    |---------------------------------------------------------------------------
+    | Si una suscripción acumula `failure_threshold` fallos CONSECUTIVOS dentro de
+    | `window_seconds`, se marca pausada por `pause_seconds`: mientras dure, no se le
+    | reintenta más. Un endpoint muerto deja de sostener slots de la cola compartida por
+    | nada. Un éxito vacía el contador. La pausa se abre sola al vencer el TTL (no hace
+    | falta reactivarla a mano).
+    |
+    | Usa el mismo store que el tope diario (`cache_store`): es infra compartida entre
+    | dominios, no necesita tabla ni migración propia.
+    |
+    | **Apagado por default.** Instalar esta versión no cambia nada hasta que el dominio
+    | ponga `enabled` en `true` a propósito. Si el store no responde, esto falla ABIERTO
+    | (sigue reintentando) — al revés del tope diario, que falla cerrado: acá no decidir
+    | y frenar tiraría avisos reales por un problema de infraestructura ajeno a la
+    | suscripción.
+    |
+    | `DeliveryCircuitBreaker` es el colaborador; no vive en `Subscription` (objeto de
+    | valor, sin `Cache`) ni en `RetryPolicy` (sin estado, se construye con `new` en los
+    | tres dominios hoy — cambiarle el constructor rompería eso).
+    */
+    'webhook_circuit_breaker' => [
+        'enabled' => (bool) env('PLATFORM_GATE_WEBHOOK_CIRCUIT_BREAKER', false),
+        'failure_threshold' => (int) env('PLATFORM_GATE_WEBHOOK_CB_THRESHOLD', 10),
+        'window_seconds' => (int) env('PLATFORM_GATE_WEBHOOK_CB_WINDOW', 3600),
+        'pause_seconds' => (int) env('PLATFORM_GATE_WEBHOOK_CB_PAUSE', 1800),
+    ],
+
 ];

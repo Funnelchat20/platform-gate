@@ -557,6 +557,53 @@ límite justo cuando el control no responde. Y "no pude evaluar" nunca se colaps
 
 ---
 
+## Actualizar desde 0.9.1
+
+Versión **0.10.0**. Aditiva y apagada por default: instalarla sola, sin tocar config, **no
+cambia ningún comportamiento**.
+
+**Por qué.** Frente a un competidor (Kapso), al sobre de webhooks le faltaban dos cosas:
+
+1. Nada identificaba un INTENTO de entrega, sólo el evento (`Event::$id`). Un reintento manda
+   el mismo evento dos veces con el mismo `id`, y el id de un recurso interno (el del mensaje,
+   por ejemplo) puede repetirse entre tipos de evento del mismo mensaje
+   (`message.sent`/`message.delivered`). El receptor no tenía con qué deduplicar sus propios
+   reintentos.
+2. Nada pausaba una suscripción que falla sistemáticamente. Un relevamiento de la cola
+   compartida mostró un endpoint muerto sosteniendo varios slots sin que nada lo frenara —cada
+   evento que le tocaba agotaba ahí sus cuatro intentos de `RetryPolicy` contra una URL que no
+   iba a responder nunca.
+
+**Qué cambia:**
+
+- `Signature::IDEMPOTENCY_HEADER` (`X-Idempotency-Key`) y `Signature::newIdempotencyKey()`: un
+  UUID v4 que quien despacha genera una vez POR INTENTO (no por evento) y manda en ese header.
+  Puramente aditivo — un dominio que no lo lee no ve nada nuevo.
+- `Webhooks\DeliveryCircuitBreaker`, nuevo colaborador: `isPaused($subscriptionId)`,
+  `recordFailure($subscriptionId)`, `recordSuccess($subscriptionId)`. Cuenta fallos
+  consecutivos en el store de cache compartido (el mismo de `cache_store`, con TTL — nada de
+  tabla ni migración nueva) y, al llegar a `failure_threshold`, pausa la suscripción por
+  `pause_seconds`. La pausa se abre sola al vencer el TTL.
+- Config nueva, sección `webhook_circuit_breaker` (`enabled`, `failure_threshold`,
+  `window_seconds`, `pause_seconds`). **`enabled` nace en `false`.**
+- `DeliveryCircuitBreaker` **falla abierto**: si el store no responde, no pausa — al revés del
+  tope diario (`DailyCallCap`, que falla cerrado por P7). Acá no decidir y frenar tiraría
+  avisos reales por un problema de infraestructura ajeno a la suscripción; la pérdida tolerable
+  es la protección de la cola, no el evento.
+- Nada más: `Subscription`, `RetryPolicy` y `Event` quedan igual que en 0.9.1. El id de
+  suscripción que recibe `DeliveryCircuitBreaker` es opaco — lo elige quien llama, porque la
+  tabla de suscripciones sigue sin ser de este paquete.
+
+**Cómo subir.** Con `^0.9`, un `composer update` no alcanza el MINOR: pedí `^0.10` (o
+`^0.9|^0.10` mientras conviven dominios). Después de subir, nada cambia hasta que el dominio
+decida usar el header y/o prender `PLATFORM_GATE_WEBHOOK_CIRCUIT_BREAKER=true` (con
+`PLATFORM_GATE_WEBHOOK_CB_THRESHOLD`, `_WINDOW` y `_PAUSE` si los defaults no sirven).
+
+**Orden.** Ninguno obligatorio: subir la versión no cambia nada por sí solo. Cada dominio
+integra el header y/o el circuit breaker en su propio transporte de webhooks, cuando le toque.
+
+---
+
 ## Actualizar desde 0.9.0
 
 Versión **0.9.1**. Compatible: no hay que cambiar config ni código, sólo subir la versión.
@@ -1003,6 +1050,8 @@ arrastrar a los demás.
 | Verificación en tiempo constante | `hash_equals`, con ventana de tolerancia de 5 min |
 | Suscripción **por tipo** | `Subscription::wants()`. Acepta `recurso.*`; `*` a secas **no existe** |
 | Tres reintentos con espera creciente: 1m, 5m, 30m | `RetryPolicy`. Sólo 5xx, 429 y errores de red |
+| Un UUID por INTENTO de entrega, no por evento (0.10) | `Signature::IDEMPOTENCY_HEADER` (`X-Idempotency-Key`), `Signature::newIdempotencyKey()` |
+| Pausa automática de una suscripción que falla sistemáticamente (0.10, apagado por default) | `Webhooks\DeliveryCircuitBreaker`. Falla ABIERTO si el store no responde |
 
 El tiempo pasado en los nombres es deliberado: un webhook avisa algo que **ya** pasó.
 `message.send` sonaría a una orden; `message.sent` es un hecho.
@@ -1026,5 +1075,10 @@ techo lo pone quien conoce sus tablas.
 - **El transporte.** Quién despacha, con qué cola y con qué guard de SSRF lo resuelve cada
   aplicación: la entrega vive donde vive el hecho.
 - **Dónde se guardan las suscripciones.** `Subscription` es un objeto de valor; la tabla es
-  de quien la necesite.
+  de quien la necesite. `DeliveryCircuitBreaker` (0.10) tampoco la necesita: el id de
+  suscripción que recibe es opaco, y el estado de la pausa vive sólo en cache con TTL.
 - **El catálogo.** Lo decide cada aplicación.
+- **Dedup de verdad en el receptor.** `X-Idempotency-Key` (0.10) le da al que recibe con qué
+  deduplicar sus propios reintentos; que lo use es decisión suya. El portero no verifica nada
+  del otro lado — ver la fila «Idempotencia» de la tabla del principio: sigue sin ser este
+  paquete el que hace idempotentes los EFECTOS de un evento.
