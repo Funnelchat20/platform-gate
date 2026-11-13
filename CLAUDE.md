@@ -44,7 +44,9 @@ A change here does nothing until each consumer upgrades. Never change a consumer
    tests. Security-relevant paths (abilities, cap, `kind`, signature, edge secret) get a test for the deny path,
    not only the allow path.
 5. **Shared test vectors are a contract.** Signature and gate vectors consumed by other implementations (the
-   Python gate, the portal's signature snippets) change only with a version bump and a note.
+   Python gate, the portal's signature snippets) change only with a version bump and a note. Signature vectors
+   live in `tests/vectors/webhook-signature.json` (since 0.11.0, exercised by `SignatureVectorsTest`); gate
+   vectors do not exist yet.
 6. **No secrets in code, fixtures or logs.** Secrets come from the consuming app's config/env.
 7. **No `git push`, no `gh pr create`, no tags pushed** without the Issue–PR Gate and the dev's explicit
    approval.

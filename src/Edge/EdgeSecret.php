@@ -18,7 +18,7 @@ namespace Funnelchat\PlatformGate\Edge;
  * Un valor vacío es "no configurado": un header vacío nunca coincide con un secreto vacío.
  * Un valor corto tampoco cuenta: es adivinable, y es lo único que separa a quien llama a un
  * host interno de quien llega por el borde. Se descarta y queda en el log; con la exigencia
- * encendida, eso es un 503 para las keys, no un borde que cualquiera imita.
+ * encendida, eso es un 500 `gate_misconfigured` para las keys, no un borde que cualquiera imita.
  */
 final readonly class EdgeSecret
 {

@@ -24,7 +24,8 @@ use InvalidArgumentException;
  * emitió.
  *
  * **`data` no puede llevar identificadores internos de cuenta** — ni `user_id`, ni
- * `account_id`, ni `owner_id`. La suscripción ya está atada a una cuenta: el número no
+ * `account_id`, ni `owner_id`, escritos como sea (`userId`, `OWNER-ID`) y dentro de lo que sea
+ * (un array, un objeto, un Resource). La suscripción ya está atada a una cuenta: el número no
  * agrega nada y sí compromete. Hay una migración a `workspace_id` en curso, y el día que
  * un cliente lea uno de esos números de un payload, las opciones pasan a ser romperle el
  * código, mantener dos campos para siempre, o no migrar. Cuesta cero evitarlo hoy, así
@@ -43,6 +44,9 @@ use InvalidArgumentException;
 final readonly class Event
 {
     private const FORBIDDEN_KEYS = ['user_id', 'account_id', 'owner_id', 'tokenable_id'];
+
+    /** Cuánto se baja al buscar: más que esto en un payload es un error, no un aviso. */
+    private const MAX_DEPTH = 512;
 
     public function __construct(
         public string $id,
@@ -84,21 +88,73 @@ final readonly class Event
         return json_encode($this->toArray(), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
     }
 
-    /** @param array<string,mixed> $data */
-    private static function assertNoAccountIdentifiers(array $data, string $path = 'data'): void
+    /**
+     * Se revisa lo que va a salir en el JSON, no la estructura de PHP (0.11.0). Hasta 0.10.0 se
+     * recorrían sólo los arrays y se comparaba el nombre exacto en `snake_case`, así que pasaban
+     * `userId`, `accountId` y cualquier objeto —un `stdClass`, un `JsonSerializable`, un Resource
+     * de Laravel— con un `user_id` adentro, que `toJson()` igual mandaba al cliente.
+     *
+     * Por eso se serializa primero, como lo hace `toJson()`, y se busca en eso: un objeto llega al
+     * cliente con sus claves igual que un array. Y el nombre se compara sin lo que no lo cambia:
+     * mayúsculas, guiones, espacios o `camelCase` (`userId`, `USER-ID`, `user id` son `user_id`).
+     *
+     * Lo que no se puede serializar no se rechaza por eso —un texto con UTF-8 roto no es una
+     * fuga—: se busca en lo que sí. Lo que no se puede revisar —más de `MAX_DEPTH` niveles— tira.
+     *
+     * @param array<string,mixed> $data
+     */
+    private static function assertNoAccountIdentifiers(array $data): void
+    {
+        $json = json_encode(
+            $data,
+            JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE,
+            self::MAX_DEPTH,
+        );
+
+        $wire = $json === false ? null : json_decode($json, true, self::MAX_DEPTH + 1);
+
+        if (! is_array($wire)) {
+            throw new InvalidArgumentException(
+                'No se pudo revisar el payload del webhook: tiene más de '.self::MAX_DEPTH.' niveles.'
+            );
+        }
+
+        self::assertNoForbiddenKey($wire, 'data');
+    }
+
+    /** @param array<array-key,mixed> $data lo que sale en el JSON, ya decodificado */
+    private static function assertNoForbiddenKey(array $data, string $path): void
     {
         foreach ($data as $key => $value) {
-            if (is_string($key) && in_array(strtolower($key), self::FORBIDDEN_KEYS, true)) {
+            $forbidden = is_string($key) ? self::forbiddenNameOf($key) : null;
+
+            if ($forbidden !== null) {
+                $spelling = $key === $forbidden ? '' : " —es `{$forbidden}` escrito de otra forma—";
+
                 throw new InvalidArgumentException(
-                    "El payload de un webhook no puede llevar `{$key}` (en `{$path}`). La suscripción "
-                    .'ya está atada a una cuenta. Si hace falta un identificador, va opaco y '
+                    "El payload de un webhook no puede llevar `{$key}` (en `{$path}`){$spelling}. La "
+                    .'suscripción ya está atada a una cuenta. Si hace falta un identificador, va opaco y '
                     .'documentado como opaco desde el primer día.'
                 );
             }
 
             if (is_array($value)) {
-                self::assertNoAccountIdentifiers($value, $path.'.'.$key);
+                self::assertNoForbiddenKey($value, $path.'.'.$key);
             }
         }
+    }
+
+    /** El nombre prohibido que `$key` escribe de otra forma, o `null`. */
+    private static function forbiddenNameOf(string $key): ?string
+    {
+        $bare = strtolower((string) preg_replace('/[^A-Za-z0-9]/', '', $key));
+
+        foreach (self::FORBIDDEN_KEYS as $forbidden) {
+            if ($bare === str_replace('_', '', $forbidden)) {
+                return $forbidden;
+            }
+        }
+
+        return null;
     }
 }

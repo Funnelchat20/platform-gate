@@ -12,6 +12,7 @@ use Funnelchat\PlatformGate\Caller\KeyIdentity;
 use Funnelchat\PlatformGate\Caller\KindColumnProbe;
 use Funnelchat\PlatformGate\Edge\EdgeTrust;
 use Funnelchat\PlatformGate\Exceptions\GateException;
+use Funnelchat\PlatformGate\Exceptions\GateMisconfigured;
 use Funnelchat\PlatformGate\Exceptions\GateUnavailable;
 use Funnelchat\PlatformGate\Exceptions\UsePublicEndpoint;
 use Funnelchat\PlatformGate\Http\ErrorBody;
@@ -208,7 +209,13 @@ final class PlatformGate
                 ['token_model' => $token::class, 'column_exists' => $columnExists]
             );
 
-            if ($columnExists === true || $this->blockOnUnreadableKind) {
+            // Con la columna en la tabla, es el modelo del dominio: no se arregla esperando
+            // (0.11.0). Con el esquema sin consultar, puede ser la base: eso sí es reintentable.
+            if ($columnExists === true) {
+                throw new GateMisconfigured('unreadable_kind');
+            }
+
+            if ($this->blockOnUnreadableKind) {
                 throw new GateUnavailable('unreadable_kind');
             }
 
@@ -231,9 +238,10 @@ final class PlatformGate
             // es un llamador que no sabemos clasificar. Tratarlo como `web` lo dejaría sin
             // ningún chequeo; tratarlo como una key sin permisos sería inventar una
             // clasificación y contestar "evalué y está denegado" (403 terminal) sin haber
-            // evaluado. Es "no pude evaluar": 503 reintentable, igual que cuando `kind` no
-            // se puede leer, y con el error en el log para que se vea.
-            CallerKind::Unverified => throw new GateUnavailable('unknown_kind'),
+            // evaluado. Es "no pude evaluar", con el error en el log para que se vea. Y no se
+            // arregla esperando —el valor está guardado en el token—: 500, sin `Retry-After`
+            // (0.11.0).
+            CallerKind::Unverified => throw new GateMisconfigured('unknown_kind'),
         };
 
         [$accountId, $isOwner] = ($this->accountResolver)($user);
@@ -261,9 +269,10 @@ final class PlatformGate
         // panel le habla directo a su dominio.
         if ($this->requireEdge && ! $fromEdge) {
             // Sin secreto configurado no hay contra qué comparar: no es "evalué y no viene del
-            // borde" (403 terminal), es "no pude evaluar". Y nunca dejar pasar.
+            // borde" (403 terminal), es "no pude evaluar". Y nunca dejar pasar. Es config del
+            // dominio: reintentar no la arregla.
             if (! $this->edge->isConfigured()) {
-                throw new GateUnavailable('edge_secret_not_configured');
+                throw new GateMisconfigured('edge_secret_not_configured');
             }
 
             throw new UsePublicEndpoint($this->publicUrl);
@@ -272,7 +281,7 @@ final class PlatformGate
         $required = $this->routes->requiredFor($request);
         $this->permissions->assert($token, $required);
 
-        // Antes del tope: un 503 por no poder leer el workspace no le gasta una llamada a nadie.
+        // Antes del tope: un rechazo por no poder leer el workspace no le gasta una llamada a nadie.
         $workspaceId = $this->readWorkspace($token);
 
         $this->cap->consume($keyId);
@@ -321,10 +330,11 @@ final class PlatformGate
      *   - Cargado, con un id: ése. Vacío o `null`: `null`.
      *   - No cargado y la columna **no existe**: ventana de rollout —accounts todavía no la
      *     creó, y hasta entonces todas las keys son del por defecto—. `null`.
-     *   - No cargado y la columna existe, o el esquema no se puede consultar: el dominio no la
-     *     selecciona (`findToken()` con columnas fijas). Tomarlo como `null` dejaría a una key
-     *     de otro workspace operar en el por defecto sin ninguna señal. 503.
-     *   - Cargado con algo que no es un id: no se sabe de qué workspace es. 503.
+     *   - No cargado y la columna existe: el dominio no la selecciona (`findToken()` con
+     *     columnas fijas). Tomarlo como `null` dejaría a una key de otro workspace operar en el
+     *     por defecto sin ninguna señal. 500 `gate_misconfigured` (0.11.0; antes, 503).
+     *   - No cargado y el esquema no se puede consultar: lo mismo, pero puede ser la base. 503.
+     *   - Cargado con algo que no es un id, o leerlo tira: no se sabe de qué workspace es. 500.
      */
     private function readWorkspace(object $token): ?int
     {
@@ -340,7 +350,7 @@ final class PlatformGate
                 'exception' => $e->getMessage(),
             ]);
 
-            throw new GateUnavailable('unreadable_workspace', $e);
+            throw new GateMisconfigured('unreadable_workspace', $e);
         }
 
         if (! $loaded) {
@@ -357,7 +367,11 @@ final class PlatformGate
                 ['token_model' => $token::class, 'column_exists' => $columnExists]
             );
 
-            throw new GateUnavailable('unreadable_workspace');
+            // Con la columna en la tabla, es el modelo del dominio: no se arregla esperando. Con
+            // el esquema sin consultar puede ser la base, y eso sí (0.11.0).
+            throw $columnExists === true
+                ? new GateMisconfigured('unreadable_workspace')
+                : new GateUnavailable('unreadable_workspace');
         }
 
         if ($raw === null || $raw === '') {
@@ -379,7 +393,7 @@ final class PlatformGate
             'type' => get_debug_type($raw),
         ]);
 
-        throw new GateUnavailable('unreadable_workspace');
+        throw new GateMisconfigured('unreadable_workspace');
     }
 
     /**
@@ -422,7 +436,7 @@ final class PlatformGate
      *
      * Un valor que no es `api_key` ni `web` NO cae en `web` por default: eso sería
      * inventar un permiso. Vuelve como `Unverified`, se loguea fuerte, y `classify()`
-     * corta con 503.
+     * corta con 500 `gate_misconfigured`.
      */
     private function readKind(object $token): ?CallerKind
     {
@@ -446,7 +460,7 @@ final class PlatformGate
         // `unverified` también es desconocido acá: es lo que dice el portero cuando no pudo
         // clasificar, no un valor que un token pueda traer en la columna.
         if ($kind === null || $kind === CallerKind::Unverified) {
-            $this->logger->error('platform-gate: `kind` desconocido en personal_access_tokens — se corta con 503', [
+            $this->logger->error('platform-gate: `kind` desconocido en personal_access_tokens — se corta', [
                 'token_model' => $token::class,
             ]);
 
@@ -461,6 +475,8 @@ final class PlatformGate
         if ($e instanceof GateUnavailable) {
             $this->logger->error('platform-gate: no se pudo evaluar', [
                 'stage' => $e->stage,
+                // `gate_misconfigured` no se arregla solo: hay que corregir el dominio (0.11.0).
+                'error' => $e->errorCode(),
                 'exception' => $e->getPrevious()?->getMessage(),
             ]);
         }

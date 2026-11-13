@@ -152,7 +152,7 @@ final class RequestIdTest extends GateTestCase
         yield '403 permission_denied' => [static fn () => null, ['kind' => 'api_key', 'abilities' => ['communities:read']], 403, 'permission_denied'];
         yield '403 route_not_available' => [static fn () => config(['platform-gate.allowed' => []]), null, 403, 'route_not_available'];
         yield '403 use_public_endpoint' => [static fn () => config(['platform-gate.require_edge' => true]), null, 403, 'use_public_endpoint'];
-        yield '503 gate_unavailable' => [static fn () => null, ['kind' => 'otra-cosa', 'abilities' => []], 503, 'gate_unavailable'];
+        yield '500 gate_misconfigured' => [static fn () => null, ['kind' => 'otra-cosa', 'abilities' => []], 500, 'gate_misconfigured'];
     }
 
     /**
@@ -176,11 +176,11 @@ final class RequestIdTest extends GateTestCase
         $id = $response->headers->get(RequestId::RESPONSE_HEADER);
         $this->assertMatchesRegularExpression(self::V4, (string) $id);
 
-        // Una llamada de key rechazada también queda registrada, y con el mismo id. El 503 de
+        // Una llamada de key rechazada también queda registrada, y con el mismo id. El 500 de
         // `kind` desconocido no llegó a saber que era una key: no tiene fila.
         $rows = $this->rows();
 
-        if ($error === 'gate_unavailable') {
+        if ($error === 'gate_misconfigured') {
             $this->assertSame([], $rows);
         } else {
             $this->assertCount(1, $rows);

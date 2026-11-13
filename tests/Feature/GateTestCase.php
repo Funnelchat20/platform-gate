@@ -124,6 +124,16 @@ abstract class GateTestCase extends TestCase
         $this->assertSame($error, json_decode((string) $response->getContent(), true)['error'] ?? null);
     }
 
+    /**
+     * Un error de configuración (0.11.0): corta, no se colapsa en un 403, y no invita a
+     * reintentar —ni 503 ni `Retry-After`—, porque esperar no lo arregla.
+     */
+    protected function assertMisconfigured(Response $response): void
+    {
+        $this->assertRejected($response, 500, 'gate_misconfigured');
+        $this->assertNull($response->headers->get('Retry-After'));
+    }
+
     protected function assertLoggedError(string $fragment): void
     {
         foreach ($this->logged as $record) {

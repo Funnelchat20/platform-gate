@@ -107,9 +107,10 @@ final class EdgeTest extends GateTestCase
         $this->assertSame(CallerKind::Unverified, $this->caller()->kind);
     }
 
-    public function test_exigencia_encendida_sin_secreto_configurado_corta_con_503(): void
+    public function test_exigencia_encendida_sin_secreto_configurado_corta_como_error_de_configuracion(): void
     {
-        // No hay contra qué comparar: "no pude evaluar", reintentable. Ni 403, ni dejar pasar.
+        // No hay contra qué comparar: "no pude evaluar". Ni 403, ni dejar pasar, y sin invitar a
+        // reintentar: la config del dominio no cambia sola (0.11.0).
         config([
             'platform-gate.require_edge' => true,
             'platform-gate.edge_secret' => null,
@@ -118,7 +119,7 @@ final class EdgeTest extends GateTestCase
 
         $response = $this->sendKey(self::SECRET);
 
-        $this->assertRejected($response, 503, 'gate_unavailable');
+        $this->assertMisconfigured($response);
         $this->assertNotSame(CallerKind::ApiKey, $this->caller()->kind);
         $this->assertSame(self::INTERNAL_HOST, $this->lastRequest->getHost());
     }
@@ -133,7 +134,7 @@ final class EdgeTest extends GateTestCase
 
         $response = $this->sendKey('changeme', ['X-Forwarded-Host' => self::PUBLIC_HOST]);
 
-        $this->assertRejected($response, 503, 'gate_unavailable');
+        $this->assertMisconfigured($response);
         $this->assertSame(self::INTERNAL_HOST, $this->lastRequest->getHost());
         $this->assertLoggedError('`PLATFORM_GATE_EDGE_SECRET` no se usa');
         $this->assertNeverLogged('changeme');

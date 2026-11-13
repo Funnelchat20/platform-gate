@@ -104,7 +104,7 @@ final class PermissionPrefixTest extends GateTestCase
         $this->assertRejected($response, 403, 'route_not_available');
     }
 
-    public function test_si_alguien_escribe_el_permiso_entero_corta_con_503(): void
+    public function test_si_alguien_escribe_el_permiso_entero_corta_como_error_de_configuracion(): void
     {
         // El error más probable: `'GET api/v1/webhooks' => 'webhooks:read'`. No se adivina qué
         // quiso decir, y no se cae a `accounts:read` en la ruta que alguien quiso sacar de ahí.
@@ -112,7 +112,7 @@ final class PermissionPrefixTest extends GateTestCase
 
         $response = $this->send('GET', 'api/v1/webhooks', $this->token(['kind' => 'api_key', 'abilities' => ['accounts:read', 'webhooks:read']]));
 
-        $this->assertRejected($response, 503, 'gate_unavailable');
+        $this->assertMisconfigured($response);
         $this->assertNotSame(CallerKind::ApiKey, $this->caller()->kind);
     }
 

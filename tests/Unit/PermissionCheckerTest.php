@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnelchat\PlatformGate\Tests\Unit;
 
+use Funnelchat\PlatformGate\Exceptions\GateMisconfigured;
 use Funnelchat\PlatformGate\Exceptions\GateUnavailable;
 use Funnelchat\PlatformGate\Exceptions\PermissionDenied;
 use Funnelchat\PlatformGate\Permissions\PermissionChecker;
@@ -156,8 +157,9 @@ final class PermissionCheckerTest extends TestCase
     #[DataProvider('unreadableAbilities')]
     public function test_si_no_puede_leer_las_abilities_corta_en_vez_de_decidir(mixed $raw): void
     {
-        // "No pude evaluar" no es "evalué y está denegado" (P7): 503 reintentable, nunca
-        // un 403 que el cliente lea como terminal — y nunca dejar pasar.
+        // "No pude evaluar" no es "evalué y está denegado" (P7): nunca un 403 que el cliente lea
+        // como terminal — y nunca dejar pasar. Y es de configuración: 500, sin invitar a
+        // reintentar (0.11.0).
         $this->assertUnavailable(fn () => (new PermissionChecker())->allows(
             $this->tokenWithoutGetAbilities($raw, canAnswers: true),
             'conversations:read',
@@ -210,8 +212,13 @@ final class PermissionCheckerTest extends TestCase
         try {
             $evaluate();
         } catch (GateUnavailable $e) {
+            // Se atrapa como `GateUnavailable` a propósito: el dominio que la atrapaba en 0.10.0
+            // sigue atrapándola.
+            $this->assertInstanceOf(GateMisconfigured::class, $e);
             $this->assertSame('unreadable_abilities', $e->stage);
-            $this->assertSame(503, $e->status());
+            $this->assertSame(500, $e->status());
+            $this->assertSame('gate_misconfigured', $e->errorCode());
+            $this->assertNull($e->retryAfter());
 
             return;
         }
