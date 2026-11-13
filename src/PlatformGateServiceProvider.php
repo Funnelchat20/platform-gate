@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Funnelchat\PlatformGate;
 
+use Funnelchat\PlatformGate\Caller\ApiKeyRequest;
 use Funnelchat\PlatformGate\Caller\CallerContext;
 use Funnelchat\PlatformGate\Caller\KeyIdentity;
 use Funnelchat\PlatformGate\Caller\KindColumnProbe;
@@ -16,6 +17,7 @@ use Funnelchat\PlatformGate\Permissions\PermissionChecker;
 use Funnelchat\PlatformGate\Permissions\RoutePermissions;
 use Funnelchat\PlatformGate\Usage\ApiCallRecorder;
 use Funnelchat\PlatformGate\Usage\CreatedResourceContext;
+use Illuminate\Contracts\Auth\Factory as AuthFactory;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Routing\Router;
@@ -82,6 +84,14 @@ final class PlatformGateServiceProvider extends ServiceProvider
 
         $this->app->singleton(KindColumnProbe::class, fn ($app) => new KindColumnProbe(
             $app->make(DatabaseManager::class)
+        ));
+
+        // Del request, como el contexto que lee (0.10). El guard, el mismo del portero.
+        $this->app->scoped(ApiKeyRequest::class, fn ($app) => new ApiKeyRequest(
+            $app->make(CallerContext::class),
+            $app->make(AuthFactory::class),
+            $app->make(LoggerInterface::class),
+            (string) $app['config']->get('platform-gate.auth_guard', 'sanctum'),
         ));
 
         $this->app->singleton(DailyCallCap::class, fn ($app) => new DailyCallCap(

@@ -16,7 +16,8 @@ Cuatro preguntas en cada request: **¿quién sos?**, **¿podés?**, **¿te pasas
 |---|---|
 | Clasifica al llamador: `api_key`, `web` o `unverified` | Frenos de envío — ritmo, plantillas, ventanas, opt-out |
 | Chequea el permiso que pide la ruta | Idempotencia |
-| Aplica el tope diario de **llamadas** por key | Autorización por cuenta (que el recurso sea de quien llama) |
+| Aplica el tope diario de **llamadas** por key y por dominio, con reinicio a las 00:00 UTC | Autorización por cuenta (que el recurso sea de quien llama) |
+| Le da el mismo formato de error a toda llamada con key: `{"error", "message"}` | Los códigos propios de cada ruta: los elige y los documenta el dominio |
 | Escribe una fila por llamada, con su id de pedido y lo que creó, y la purga a los 90 días | Emitir, validar o revocar keys |
 | Devuelve `X-Request-Id` en cada respuesta | Leer el registro: se consulta por SQL |
 | Reconoce lo que llega por el borde (`api.funnelchat.com`) y le cree host e IP | Rutear entre dominios — eso es el Worker |
@@ -74,9 +75,22 @@ use Illuminate\Http\Request;
     $middleware->appendToGroup('api', \Funnelchat\PlatformGate\Http\Middleware\PlatformGate::class);
 })
 ->withExceptions(function (Exceptions $exceptions) {
+    // Tus propios `render`, si tenés, van antes: ganan sobre los de la librería.
+
     // El 401 de `api/*`, igual en todos los dominios.
     \Funnelchat\PlatformGate\Http\UnauthenticatedResponse::register($exceptions);
+
+    // El formato de error de las llamadas con key (0.10). Ver «El formato de error».
+    \Funnelchat\PlatformGate\Http\ErrorResponse::register($exceptions);
 })
+```
+
+Y, si el dominio publica su OpenAPI con Scramble, en un service provider:
+
+```php
+use Dedoc\Scramble\Scramble;
+
+Scramble::afterOpenApiGenerated(new \Funnelchat\PlatformGate\OpenApi\AddErrorCode());
 ```
 
 `PlatformGate` tiene que correr **después** de `auth:sanctum` —necesita el token resuelto— y
@@ -504,7 +518,7 @@ host interno y la IP del Worker.
 | Le falta el permiso | 403 | `permission_denied` | Terminal |
 | Ruta fuera de `allowed`, o de la superficie amplificada | 403 | `route_not_available` | Terminal — no hay permiso que pedir |
 | Una key llegó directo a un host interno y el dominio exige el borde | 403 | `use_public_endpoint` | Terminal — hay que cambiar la URL |
-| Se pasó del tope diario | 429 + `Retry-After` | `daily_cap_exceeded` | Terminal por hoy |
+| Se pasó del tope diario (por key y por dominio) | 429 + `Retry-After` | `daily_cap_exceeded` | Terminal hasta las 00:00 UTC |
 | **No se pudo evaluar** | 503 + `Retry-After` | `gate_unavailable` | **Reintentable** |
 
 Todas llevan `X-Request-Id` (0.8).
@@ -554,6 +568,209 @@ La última es la que importa: si el store se cae, **corta, no deja pasar**. Deja
 cuando no se puede evaluar es el agujero clásico — el cliente automatizado se pasa del
 límite justo cuando el control no responde. Y "no pude evaluar" nunca se colapsa con
 "evalué y está denegado": son dos respuestas para el cliente y dos métricas para vos.
+
+---
+
+## El formato de error de las llamadas con key
+
+Toda respuesta de error a una llamada con key trae lo mismo (0.10, contrato
+`1113-errores-y-limites`):
+
+```json
+{"error": "not_found", "message": "No se encontró lo que se pidió."}
+```
+
+`error` es un código estable, en `snake_case`: es lo que quien integra compara. `message` es para
+personas, en español, y puede cambiar. El 422 trae además `errors`, campo por campo. **Nunca se
+quita una clave que la respuesta ya traía**: se agrega `error` donde falta.
+
+**Sólo a las llamadas con key.** El panel usa las mismas rutas `api/*` con su sesión o su token
+`web`, y recibe exactamente lo de antes: el mismo status, el mismo cuerpo, el mismo texto.
+
+| Qué | Quién lo hace | Qué hace el dominio |
+|---|---|---|
+| Las excepciones de Laravel | `ErrorResponse`, en `bootstrap/app.php` | Engancharlo (una línea, ver «Instalación») |
+| Las respuestas de error que el dominio arma a mano | El portero, al devolver la respuesta | Nada: viene con la versión |
+| La especificación | `AddErrorCode`, un transformador de Scramble | Engancharlo, si publica con Scramble |
+
+### Las excepciones de Laravel: `ErrorResponse`
+
+| Excepción —o lo que Laravel convierte en ella— | Status | `error` | `message` |
+|---|---|---|---|
+| `ValidationException` | 422 | `validation_failed` | El del validador del dominio, en su idioma. Y `errors` |
+| Modelo, registros o ruta que no existen | 404 | `not_found` | Genérico |
+| `AuthorizationException` | 403 | `forbidden` | El de la policy (`Response::deny('…')`) si dio uno; si no, genérico |
+| El `throttle` de Laravel | 429 + `Retry-After` | `rate_limited` | Genérico |
+| Cualquier otra `HttpException` (`abort(…)`) | La suya | El de su status (abajo) | El del dominio si escribió uno; si no, genérico |
+
+Se conservan las cabeceras de la excepción (`Retry-After`, `X-RateLimit-*`) y la respuesta lleva
+`X-Request-Id`. Sale en JSON aunque el pedido no lo pida: a una key no se le contesta con una
+página HTML.
+
+**El texto de Laravel no sale.** «No query results for model [App\Models\Contact] 5.», «This
+action is unauthorized.», «Too Many Attempts.», «The route … could not be found.»: en inglés, y el
+primero con el nombre de una clase. En su lugar va el genérico del código. Se distingue sin
+comparar textos: lo que Laravel convirtió desde otra excepción, su `throttle` y lo que corta el
+router antes de resolver una ruta son de Laravel; un `abort()` o una `HttpException` que tira el
+dominio, del dominio.
+
+**El código según el status** (`ErrorCode`), cuando el dominio no tiene uno más preciso:
+
+| Status | `error` |
+|---|---|
+| 400 | `bad_request` |
+| 401 | `unauthenticated` |
+| 402 | `payment_required` |
+| 403 | `forbidden` |
+| 404 | `not_found` |
+| 405 | `method_not_allowed` |
+| 409 | `conflict` |
+| 413 | `payload_too_large` |
+| 422 | `validation_failed` |
+| 429 | `rate_limited` |
+| 500 | `internal_error` |
+| 503 | `unavailable` |
+
+Otro 4xx sale `bad_request`, y otro 5xx, `internal_error`: nunca un código que el portal no
+documente. Los del portero (`permission_denied`, `daily_cap_exceeded`…) no cambian.
+
+**Lo que no toca:** una `ValidationException` que trae su propia respuesta (un `FormRequest` con
+su `failedValidation`), una `HttpResponseException`, una excepción con su propio `render()`, un
+`render` del dominio registrado antes que éste —el primero que contesta gana— y un 500 que no es
+una `HttpException`. Eso sale como lo arma Laravel o el dominio; si pasó por el portero, con
+`error` agregado (abajo). El 401 es de `UnauthenticatedResponse`. Fuera de `api/*` no hace nada;
+otro prefijo: `ErrorResponse::register($exceptions, 'v2/*')`.
+
+### Cómo se sabe que la llamada es de una key
+
+La excepción puede saltar **antes** de que corra el portero: una ruta que no existe —el router
+corta antes de cualquier middleware de ruta—, o un `throttle` o un binding de modelo, que la
+prioridad de middlewares de Laravel pone delante del portero. Por eso no alcanza con preguntarle
+al portero (`Caller\ApiKeyRequest`):
+
+1. Si el portero ya clasificó la llamada, lo que dijo: `api_key` sí, `web` no.
+2. Si no, el `kind` del token, igual que lo mira el portero: el del token que ya resolvió
+   `auth:sanctum`, o el del `Bearer` del pedido, buscado con el modelo de tokens del dominio
+   (`findToken()`, el de Sanctum o el que el dominio sobreescriba). Es una consulta, sólo en el
+   camino de error y sólo si el portero no clasificó.
+
+La forma del token no alcanza: una key y el token `web` del panel son tokens de Sanctum iguales;
+los distingue `kind`. **Ante la duda, no es key**: si `kind` no se puede leer o la consulta falla,
+la respuesta queda como la arma Laravel —el panel no puede cambiar por un error nuestro— y queda
+un warning en el log. No se mira si la key venció: esto no decide si la llamada pasa, sólo cómo se
+le contesta a quien presentó la key.
+
+### Lo que el dominio arma a mano
+
+Una respuesta JSON de error (4xx o 5xx) sin `error` lo gana al pasar por el portero, en las
+llamadas con key:
+
+```text
+403 {"message": "Esta API key no puede usar ese workspace.", "code": "workspace_forbidden"}
+  → {"error": "workspace_forbidden", "message": "Esta API key no puede usar ese workspace.", "code": "workspace_forbidden"}
+
+409 {"message": "El contacto está en una campaña activa."}
+  → {"error": "conflict", "message": "El contacto está en una campaña activa."}
+```
+
+- Si trae `code` (un string) y no `error`, `error` toma ese valor. Si no, el de su status.
+- `error` va primero y el resto del cuerpo queda byte por byte como estaba. Un cuerpo que ya trae
+  `error`, con el valor que sea, no se toca.
+- Sólo un objeto JSON. Una lista, un cuerpo que no es JSON o una descarga salen como estaban.
+- Sólo lo que vuelve por el portero: lo que responde un middleware del dominio que corre antes
+  que él sale como lo armó.
+
+Viene con la versión, sin enganchar nada. Lo que Laravel rinde de una excepción que salta dentro
+de la ruta también vuelve por el portero, así que sin `ErrorResponse` también gana `error`; pero
+con el texto de Laravel, sólo si el pedido pidió JSON y sólo si saltó después del portero. Por
+eso `ErrorResponse` se engancha igual.
+
+### La especificación: `AddErrorCode`
+
+Sin esto, el OpenAPI que genera Scramble documenta el 403, el 404 y el 422 sólo con `message`
+—es lo que deduce de las excepciones de Laravel—, aunque la API ya devuelva `error`. Es un
+transformador de documento: corre cuando Scramble terminó de armarlo.
+
+```php
+// app/Providers/AppServiceProvider.php, en boot()
+use Dedoc\Scramble\Scramble;
+
+Scramble::afterOpenApiGenerated(new \Funnelchat\PlatformGate\OpenApi\AddErrorCode());
+```
+
+Eso engancha la API por defecto de Scramble. Si el dominio publica otra
+(`Scramble::registerApi(...)`), en la configuración de esa:
+`Scramble::configure('<api>')->withDocumentTransformers(new AddErrorCode())` (Scramble 0.13).
+
+A cada respuesta 4xx o 5xx con cuerpo `application/json` que sea un objeto sin `error` —las
+`*Exception` de `components.responses` y las de cada operación— le agrega `error`: primera
+propiedad, obligatoria, string, con el código genérico de su status como ejemplo y, en el 403, el
+429 y el 503, los códigos del portero que pueden salir con ese status. Si el cuerpo trae `code`,
+`error` lleva lo mismo. Lo que ya trae `error`, un cuerpo que es una referencia a un esquema, una
+lista o algo que no es JSON no se toca. **Los códigos propios de cada ruta los documenta el
+dominio.**
+
+La librería no exige Scramble: `AddErrorCode` no implementa nada suyo y sólo se carga si el
+dominio lo usa. Probado con Scramble 0.12.36 y 0.13.53.
+
+---
+
+## Actualizar desde 0.9
+
+Versión **0.10.0**. Cambian las respuestas de error de las llamadas con key: hay que revisar los
+tests del dominio que comparan esos cuerpos (abajo). Sin cambios de config ni migraciones.
+
+**Por qué.** El portal promete que todo error de la API trae `error` (un código estable) y
+`message` (para personas). Hasta 0.9.1 eso lo cumplía sólo el portero: los dominios devolvían el
+`{"message": …}` de Laravel en 403, 404 y 422, y cada uno armaba a mano otras formas —accounts usa
+`code` en los 403 de workspace—. La especificación publicada (v0.6.14) documenta esas respuestas
+sólo con `message`. Escrito tres veces es como se separaron, así que lo da la librería, como ya
+daba el 401 con `UnauthenticatedResponse`. Además, la revisión de huecos del 13-11
+(`HUECOS-2026-11-13.md`, punto 8, en el repo de coordinación) marcó que el tope diario es por
+dominio y no sólo por key —cada dominio cuenta en su store—, con el corte a medianoche UTC,
+mientras el README decía «por key» y el mensaje, «diarias». El comportamiento del tope no cambia:
+cambia lo que se dice de él. Contrato `1113-errores-y-limites` v0.1, sección P, iniciativa
+api-abierta.
+
+**Qué cambia, sólo en las llamadas con key:**
+
+- `ErrorResponse::register($exceptions)`, nuevo: las excepciones de Laravel salen con `error`, en
+  JSON y con texto en español donde el de Laravel no sirve. Ver «El formato de error de las
+  llamadas con key». Hasta engancharlo, no cambian.
+- **El portero agrega `error`** a las respuestas JSON de error que vuelven por él sin uno: las que
+  arma el dominio y las que Laravel rinde de una excepción dentro de la ruta. Viene con la versión,
+  sin enganchar nada. Nunca quita ni cambia una clave.
+- `AddErrorCode`, nuevo: el transformador de Scramble que pone `error` en la especificación.
+- **El texto de `daily_cap_exceeded`** pasa de «Esta API key superó su tope de N llamadas
+  diarias.» a «… llamadas diarias. El tope es por clave y por dominio, y se reinicia a las 00:00
+  UTC.». `error`, el status, `Retry-After` y cómo se cuenta no cambian.
+- `ErrorCode`, `ErrorBody` y `Caller\ApiKeyRequest`, nuevos, para el dominio que quiera armar
+  sus propias respuestas con los mismos códigos.
+- Las llamadas sin key —el panel— no cambian en nada: ni status, ni cuerpo, ni texto. Tampoco
+  cambian el 401, los rechazos del portero, `Caller`, `api_call_log` ni los permisos.
+
+**Antes de subir, en el dominio:**
+
+1. **Tests que comparan un cuerpo de error con key** con `assertExactJson`: ahora traen `error`.
+   Que comparen `error`, que es lo estable, o el cuerpo nuevo.
+2. **Tests que comparan el texto del 429 `daily_cap_exceeded`**: que comparen `error`.
+3. **Los `render` propios en `withExceptions`** van antes de `ErrorResponse::register`: el primero
+   que contesta gana, y así el del dominio sigue ganando.
+4. **Un cuerpo propio que trae `error` con otro sentido** (un booleano, un objeto) queda como está
+   —no se pisa— y no cumple el formato: se cambia en el dominio.
+
+**Cómo subir.** Cambiar la restricción a `^0.10` —`^0.9` no la toma— y
+`composer update funnelchat20/platform-gate`. En el mismo cambio, la línea de `ErrorResponse` en
+`bootstrap/app.php` y, si el dominio publica con Scramble, la de `AddErrorCode` (ver
+«Instalación»).
+
+**Orden** (el del contrato):
+
+1. Se publica 0.10.0. Nadie cambia hasta subir.
+2. accounts, conversations y communities suben, enganchan `ErrorResponse` y `AddErrorCode`, y
+   llevan sus cuerpos propios al formato. En cualquier orden entre ellos.
+3. El portal, con las especificaciones nuevas de los tres: no puede adelantarse a lo que
+   responden.
 
 ---
 
@@ -949,6 +1166,24 @@ Y una opción nueva, que no cambia nada si no la definís:
    juntarlos. Sin él, el `key_id` sigue saliendo del `APP_KEY` de cada dominio, como en 0.5.
    Definirlo cambia todos los `key_id`: las filas viejas del registro y los overrides de
    `daily_call_cap_overrides` quedan con el valor anterior.
+
+---
+
+## El tope diario: por key y por dominio
+
+10 000 llamadas por día por key (`PLATFORM_GATE_DAILY_CALL_CAP`), **en cada dominio**: cada uno
+cuenta en su propio store de cache (`PLATFORM_GATE_CACHE_STORE`), así que accounts, communities
+y conversations cuentan aparte. Una key que agotó su tope en uno sigue andando en los otros.
+
+El día es el de UTC: el contador se reinicia a las 00:00 UTC, y el 429 `daily_cap_exceeded` trae
+`Retry-After` con los segundos que faltan. El mensaje lo dice (0.10):
+
+```json
+{"error": "daily_cap_exceeded", "message": "Esta API key superó su tope de 10000 llamadas diarias. El tope es por clave y por dominio, y se reinicia a las 00:00 UTC."}
+```
+
+Los overrides (`daily_call_cap_overrides`) también son de cada dominio: el que se carga en uno no
+cambia el tope de esa key en los otros.
 
 ---
 

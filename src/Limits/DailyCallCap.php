@@ -10,7 +10,11 @@ use Illuminate\Contracts\Cache\Repository as Cache;
 use Throwable;
 
 /**
- * Tope duro diario POR KEY (pedido P4).
+ * Tope duro diario POR KEY Y POR DOMINIO (pedido P4).
+ *
+ * Por dominio porque el contador vive en el store de cache de cada dominio (`cache_store`): una
+ * key que agotó su tope en conversations sigue andando en accounts. El día es el de UTC: se
+ * reinicia a las 00:00 UTC, y `Retry-After` dice cuántos segundos faltan.
  *
  * ⚠️ ADVERTENCIA, y está acá porque es donde alguien la va a leer:
  *
@@ -40,7 +44,7 @@ final readonly class DailyCallCap
     /**
      * Cuenta esta llamada y corta si se pasó.
      *
-     * @throws DailyCapExceeded  terminal por hoy
+     * @throws DailyCapExceeded  terminal hasta las 00:00 UTC
      * @throws GateUnavailable   no pudimos evaluar: cortamos, no dejamos pasar (P7)
      */
     public function consume(string $keyId): void
