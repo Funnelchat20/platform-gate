@@ -1,0 +1,30 @@
+name: Packagist
+
+# Packagist does not learn about new tags on its own: this repo has no webhook.
+# Releases are created with `gh release create vX.Y.Z --target <merge>`; publishing
+# one asks Packagist to read the repository again. Can also be run by hand.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask Packagist to read the new tag
+        env:
+          PACKAGIST_USERNAME: ${{ secrets.PACKAGIST_USERNAME }}
+          PACKAGIST_TOKEN: ${{ secrets.PACKAGIST_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${PACKAGIST_USERNAME}" || -z "${PACKAGIST_TOKEN}" ]]; then
+            echo "::error::The secrets PACKAGIST_USERNAME and PACKAGIST_TOKEN are missing."
+            exit 1
+          fi
+          curl -fsS -X POST -H 'Content-Type: application/json' \
+            "https://packagist.org/api/update-package?username=${PACKAGIST_USERNAME}&apiToken=${PACKAGIST_TOKEN}" \
+            -d "{\"repository\":{\"url\":\"https://github.com/${GITHUB_REPOSITORY}\"}}"
