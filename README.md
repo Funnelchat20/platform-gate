@@ -831,6 +831,21 @@ del contrato `1113-errores-y-limites` (commit `ce7a8c73265d` del repo de coordin
 
 ---
 
+## Cómo se publica una versión
+
+1. El cambio entra a `main` por PR, con su sección «Actualizar desde <versión anterior>».
+2. Se crea el tag y el release de GitHub sobre el merge: `gh release create vX.Y.Z --target <merge>`.
+3. **Packagist se actualiza solo.** Al publicarse el release, el workflow
+   `.github/workflows/packagist.yml` le pide a Packagist que lea el repositorio; no hay que
+   entrar a packagist.org. También se puede correr a mano desde la pestaña *Actions*
+   (`workflow_dispatch`).
+
+El workflow necesita dos secretos del repositorio: `PACKAGIST_USERNAME` y `PACKAGIST_TOKEN` (un
+*Safe API Token* de Packagist). Si falta alguno, el job falla con un error que lo dice y la
+versión nueva no aparece en Packagist hasta corregirlo y volver a correr el workflow.
+
+---
+
 ## Actualizar desde 0.9
 
 Versión **0.10.0**. Cambian las respuestas de error de las llamadas con key: hay que revisar los
