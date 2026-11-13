@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Funnelchat\PlatformGate\Permissions;
 
-use Funnelchat\PlatformGate\Exceptions\GateUnavailable;
+use Funnelchat\PlatformGate\Exceptions\GateMisconfigured;
 use Funnelchat\PlatformGate\Exceptions\RouteNotAvailable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -44,6 +44,14 @@ use Illuminate\Support\Str;
  * Los patrones se machean contra el URI DEFINIDO de la ruta (`api/v1/contacts/{contact}`),
  * no contra el path del request, así que los ids no ensucian el patrón.
  *
+ * Un patrón con método cubre también el método hermano que Laravel registra en la MISMA ruta
+ * (0.11.0): `GET` cubre `HEAD`, y `PUT` y `PATCH` se cubren entre sí. Laravel le agrega `HEAD` a
+ * toda ruta `GET`, y `Route::resource` registra el update como `PUT|PATCH`: es una sola ruta con
+ * dos verbos. Con la comparación literal, `GET …` en `allowed` le daba 403 a un `HEAD`, y
+ * `PUT …` en `send` u `operate` dejaba el `PATCH` de esa misma ruta como `write` — un grado
+ * menor por cambiar el verbo. Sólo si la ruta acepta los dos: un `PATCH` que resuelve a otra
+ * ruta, registrada aparte con el mismo URI, no queda cubierto por `PUT …`.
+ *
  * Y el NOMBRE del placeholder se ignora: `{contact}`, `{contact_id}` y `{id}` son todos
  * lo mismo para el matcheo. No es comodidad, es una defensa. En conversations el mismo
  * recurso está registrado como `{contact}` en unas rutas y `{contact_id}` en otras, y la
@@ -56,6 +64,14 @@ final readonly class RoutePermissions
 {
     /** Como el nombre de un dominio: minúsculas, dígitos y guiones (`wha-link`). Sin `:`. */
     private const PREFIX = '/^[a-z0-9]+(-[a-z0-9]+)*$/';
+
+    /** Los verbos que Laravel registra juntos en una misma ruta (ver arriba). */
+    private const SIBLING_METHODS = [
+        'GET' => 'HEAD',
+        'HEAD' => 'GET',
+        'PUT' => 'PATCH',
+        'PATCH' => 'PUT',
+    ];
 
     private bool $permissionPrefixIsReadable;
 
@@ -83,9 +99,10 @@ final readonly class RoutePermissions
     }
 
     /**
-     * @throws RouteNotAvailable si la ruta cae en la superficie amplificada.
-     * @throws GateUnavailable   si no hay ruta resuelta y por lo tanto no se puede clasificar, o
-     *                           si `permission_prefix` no se puede leer o le da dos prefijos.
+     * @throws RouteNotAvailable si la ruta cae en la superficie amplificada o fuera de `allowed`.
+     * @throws GateMisconfigured si no hay ruta resuelta y por lo tanto no se puede clasificar, o
+     *                           si `permission_prefix` no se puede leer o le da dos prefijos. Es
+     *                           un `GateUnavailable`: quien lo atrapaba lo sigue atrapando.
      */
     public function requiredFor(Request $request): string
     {
@@ -97,14 +114,15 @@ final readonly class RoutePermissions
             // dejarían de aplicar en silencio y la superficie amplificada quedaría
             // alcanzable con `write`. Es el peor fallo abierto posible acá, así que se
             // corta. No debería pasar —el portero corre después del routing— y si pasa,
-            // es un problema de montaje que hay que ver, no tapar.
-            throw new GateUnavailable('unresolved_route');
+            // es un problema de montaje que hay que ver, no tapar. Y reintentar no lo arregla.
+            throw new GateMisconfigured('unresolved_route');
         }
 
         $uri = $route->uri();
         $method = strtoupper($request->method());
+        $routeMethods = array_map('strtoupper', $route->methods());
 
-        if ($this->matchesAny($this->denied, $method, $uri)) {
+        if ($this->matchesAny($this->denied, $method, $uri, $routeMethods)) {
             throw new RouteNotAvailable();
         }
 
@@ -114,13 +132,13 @@ final readonly class RoutePermissions
         // se entera hasta que la usan; un dominio que monta el portero y no declara su
         // superficie expone todo sin haberlo decidido. Acá una ruta nueva nace denegada,
         // y abrir todo (`['*']`) es algo que hay que escribir.
-        if (! $this->matchesAny($this->allowed, $method, $uri)) {
+        if (! $this->matchesAny($this->allowed, $method, $uri, $routeMethods)) {
             throw new RouteNotAvailable();
         }
 
-        $prefix = $this->prefixFor($method, $uri);
+        $prefix = $this->prefixFor($method, $uri, $routeMethods);
 
-        if ($this->matchesAny($this->send, $method, $uri)) {
+        if ($this->matchesAny($this->send, $method, $uri, $routeMethods)) {
             return "{$prefix}:send";
         }
 
@@ -128,7 +146,7 @@ final readonly class RoutePermissions
         // aparte, no un peldaño más alto. Una ruta que muta el recurso externo de forma
         // irreversible —resetear una sesión, purgar una cola— no puede viajar en el
         // mismo permiso que editar un nombre, aunque las dos sean POST.
-        if ($this->matchesAny($this->operate, $method, $uri)) {
+        if ($this->matchesAny($this->operate, $method, $uri, $routeMethods)) {
             return "{$prefix}:operate";
         }
 
@@ -147,24 +165,28 @@ final readonly class RoutePermissions
      * quiso sacar de ahí. Y dos patrones que le dan a la misma ruta prefijos distintos no se
      * resuelven por orden de declaración: eso haría que reordenar la config cambie permisos.
      *
-     * @throws GateUnavailable
+     * Los dos son de configuración: reintentar no los arregla (0.11.0).
+     *
+     * @param string[] $routeMethods
+     *
+     * @throws GateMisconfigured
      */
-    private function prefixFor(string $method, string $uri): string
+    private function prefixFor(string $method, string $uri, array $routeMethods): string
     {
         if (! $this->permissionPrefixIsReadable) {
-            throw new GateUnavailable('unreadable_permission_prefix');
+            throw new GateMisconfigured('unreadable_permission_prefix');
         }
 
         $prefixes = [];
 
         foreach ($this->permissionPrefix as $pattern => $prefix) {
-            if ($this->matches($pattern, $method, $uri)) {
+            if ($this->matches($pattern, $method, $uri, $routeMethods)) {
                 $prefixes[$prefix] = true;
             }
         }
 
         if (count($prefixes) > 1) {
-            throw new GateUnavailable('ambiguous_permission_prefix');
+            throw new GateMisconfigured('ambiguous_permission_prefix');
         }
 
         return (string) (array_key_first($prefixes) ?? $this->domain);
@@ -186,11 +208,14 @@ final readonly class RoutePermissions
         return true;
     }
 
-    /** @param string[] $patterns */
-    private function matchesAny(array $patterns, string $method, string $uri): bool
+    /**
+     * @param string[] $patterns
+     * @param string[] $routeMethods
+     */
+    private function matchesAny(array $patterns, string $method, string $uri, array $routeMethods): bool
     {
         foreach ($patterns as $pattern) {
-            if ($this->matches($pattern, $method, $uri)) {
+            if ($this->matches($pattern, $method, $uri, $routeMethods)) {
                 return true;
             }
         }
@@ -198,7 +223,8 @@ final readonly class RoutePermissions
         return false;
     }
 
-    private function matches(string $pattern, string $method, string $uri): bool
+    /** @param string[] $routeMethods los métodos que acepta la ruta resuelta */
+    private function matches(string $pattern, string $method, string $uri, array $routeMethods): bool
     {
         $pattern = trim($pattern);
 
@@ -206,12 +232,28 @@ final readonly class RoutePermissions
         if (str_contains($pattern, ' ')) {
             [$patternMethod, $patternUri] = explode(' ', $pattern, 2);
 
-            return strtoupper(trim($patternMethod)) === $method
+            return $this->coversMethod(strtoupper(trim($patternMethod)), $method, $routeMethods)
                 && Str::is($this->normalize(trim($patternUri)), $this->normalize($uri));
         }
 
         // "api/v1/broadcasts/*" — cualquier método.
         return Str::is($this->normalize($pattern), $this->normalize($uri));
+    }
+
+    /**
+     * ¿El método del patrón cubre el del pedido? El mismo, o su hermano si la ruta resuelta
+     * acepta los dos: entonces el patrón nombró esta ruta por su otro verbo (ver arriba).
+     *
+     * @param string[] $routeMethods
+     */
+    private function coversMethod(string $patternMethod, string $method, array $routeMethods): bool
+    {
+        if ($patternMethod === $method) {
+            return true;
+        }
+
+        return (self::SIBLING_METHODS[$method] ?? null) === $patternMethod
+            && in_array($patternMethod, $routeMethods, true);
     }
 
     /**

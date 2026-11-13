@@ -35,7 +35,7 @@ use Throwable;
  * **Ante la duda, no es key.** Lo que se decide acá no es un permiso sino un formato, y lo que el
  * contrato no negocia es que el panel reciba exactamente lo de antes. Un `kind` ilegible o una
  * consulta que falla dejan la respuesta de Laravel —el portero, si llega a correr, corta esa key
- * con 503 de todos modos—. Nunca tira: un error al decidir el formato no puede convertir un 404
+ * de todos modos—. Nunca tira: un error al decidir el formato no puede convertir un 404
  * en un 500.
  *
  * No mira si la key venció: no decide si pasa, sólo cómo se le contesta a quien la presentó.

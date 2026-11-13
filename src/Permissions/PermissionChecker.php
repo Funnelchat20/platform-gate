@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Funnelchat\PlatformGate\Permissions;
 
-use Funnelchat\PlatformGate\Exceptions\GateUnavailable;
+use Funnelchat\PlatformGate\Exceptions\GateMisconfigured;
 use Funnelchat\PlatformGate\Exceptions\PermissionDenied;
 use Laravel\Sanctum\Contracts\HasAbilities;
 use Throwable;
@@ -49,7 +49,8 @@ final class PermissionChecker
 
     /**
      * @throws PermissionDenied
-     * @throws GateUnavailable si no se puede leer la lista de permisos del token.
+     * @throws GateMisconfigured si no se puede leer la lista de permisos del token (es un
+     *                           `GateUnavailable`).
      */
     public function assert(HasAbilities $token, string $required): void
     {
@@ -59,7 +60,8 @@ final class PermissionChecker
     }
 
     /**
-     * @throws GateUnavailable si no se puede leer la lista de permisos del token.
+     * @throws GateMisconfigured si no se puede leer la lista de permisos del token (es un
+     *                           `GateUnavailable`).
      */
     public function allows(HasAbilities $token, string $required): bool
     {
@@ -91,11 +93,13 @@ final class PermissionChecker
      *
      * Si no hay lista legible —el dominio no selecciona la columna, el valor no es una
      * lista, leer el atributo tira— no hay con qué evaluar, y se corta (P7). Ni "evalué
-     * y está denegado" (sería un 403 terminal que miente) ni dejar pasar.
+     * y está denegado" (sería un 403 terminal que miente) ni dejar pasar. Y es de
+     * configuración: el modelo o el dato del token no cambian solos, así que reintentar no
+     * sirve (0.11.0, `GateMisconfigured`).
      *
      * @return list<string>
      *
-     * @throws GateUnavailable
+     * @throws GateMisconfigured
      */
     public function abilitiesOf(object $token): array
     {
@@ -112,11 +116,11 @@ final class PermissionChecker
                 $raw = iterator_to_array($raw, false);
             }
         } catch (Throwable $e) {
-            throw new GateUnavailable('unreadable_abilities', $e);
+            throw new GateMisconfigured('unreadable_abilities', $e);
         }
 
         if (! is_array($raw)) {
-            throw new GateUnavailable('unreadable_abilities');
+            throw new GateMisconfigured('unreadable_abilities');
         }
 
         return array_values(array_filter($raw, 'is_string'));

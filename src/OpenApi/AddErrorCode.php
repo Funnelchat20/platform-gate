@@ -43,6 +43,7 @@ final class AddErrorCode
     private const GATE_CODES = [
         403 => ['permission_denied', 'route_not_available', 'use_public_endpoint'],
         429 => ['daily_cap_exceeded'],
+        500 => ['gate_misconfigured'],
         503 => ['gate_unavailable'],
     ];
 

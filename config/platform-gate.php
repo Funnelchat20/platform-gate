@@ -27,6 +27,9 @@ return [
     |
     | Patrones: "POST api/v1/message/send-message" o "api/v1/messages/*".
     | Se machean contra el URI DEFINIDO de la ruta, no contra el path del request.
+    | Un patrón con método cubre el verbo hermano de la misma ruta (0.11.0): `GET`
+    | el `HEAD`, y `PUT` y `PATCH` entre sí, como los registra `Route::resource`.
+    | Vale para todas las listas.
     */
     'send' => [],
 
@@ -49,7 +52,11 @@ return [
     | Superficie pública — lo único que una key puede alcanzar
     |---------------------------------------------------------------------------
     | Sólo lo que machee acá es alcanzable por una key: todo lo demás se rechaza
-    | como si no existiera (403 `route_not_available`).
+    | con 403 `route_not_available`.
+    |
+    | No es "como si no existiera": una ruta que no existe da el 404 del dominio,
+    | así que quien llama distingue una ruta cerrada de una inexistente. Una ruta
+    | cerrada no es secreta: que no esté acá no la esconde.
     |
     | **Vacía = ninguna ruta.** Un dominio que no declara su superficie no expone
     | nada a las keys. Una ruta nueva nace denegada, y el día que se quiera abrir
@@ -99,7 +106,8 @@ return [
     |
     | Falla cerrado: un valor que no es un prefijo (`webhooks:read`, vacío, con
     | mayúsculas) o dos patrones que le dan prefijos distintos a la misma ruta
-    | cortan las llamadas de key con 503 `gate_unavailable`, no caen al dominio.
+    | cortan las llamadas de key con 500 `gate_misconfigured` (0.11.0), sin
+    | `Retry-After`: es config, reintentar no la arregla. No caen al dominio.
     */
     'permission_prefix' => [],
 
@@ -223,10 +231,11 @@ return [
     | Normalmente NO hace falta tocarlo: el portero le pregunta al esquema.
     |
     |   columna ausente  → ventana de rollout, no hay keys → deja pasar
-    |   columna presente → el dominio no la selecciona → **corta con 503**
+    |   columna presente → el dominio no la selecciona → **corta con 500**
+    |                      `gate_misconfigured` (0.11.0; antes, 503)
     |
     | Este flag sólo fuerza el corte en el tercer caso: cuando el esquema no se
-    | puede consultar. `false` (default) deja pasar ahí para no voltear el front
+    | puede consultar. Ahí corta con 503 `gate_unavailable`, que sí se reintenta. `false` (default) deja pasar ahí para no voltear el front
     | por un problema de infraestructura, dejando el error en el log.
     |
     | El default NO puede ser `true`: con la columna todavía sin desplegar, cortar

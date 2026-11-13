@@ -190,11 +190,25 @@ final class CallerWorkspaceTest extends GateTestCase
 
         $response = $this->gateSees($this->key(), ['X-Workspace-Id' => '999']);
 
-        $this->assertRejected($response, 503, 'gate_unavailable');
-        $this->assertSame('5', $response->headers->get('Retry-After'));
+        $this->assertMisconfigured($response);
         $this->assertFalse($this->reachedDomain);
         $this->assertSame(CallerKind::Unverified, $this->caller()->kind);
         $this->assertLoggedError('no trae `workspace_id`');
+    }
+
+    public function test_si_el_esquema_no_se_puede_consultar_corta_y_ahi_si_se_reintenta(): void
+    {
+        // Sin el atributo y sin poder preguntarle al esquema, puede ser la base y no la config:
+        // ése sigue siendo el 503 que se reintenta (0.11.0). Una conexión que no existe hace
+        // tirar a la consulta del esquema.
+        $token = $this->key();
+        $token->setConnection('no-existe');
+
+        $response = $this->gateSees($token, ['X-Workspace-Id' => '999']);
+
+        $this->assertRejected($response, 503, 'gate_unavailable');
+        $this->assertSame('5', $response->headers->get('Retry-After'));
+        $this->assertFalse($this->reachedDomain);
     }
 
     /** @return iterable<string, array{mixed}> */
@@ -213,18 +227,18 @@ final class CallerWorkspaceTest extends GateTestCase
     {
         $response = $this->gateSees($this->key(['workspace_id' => $value]), ['X-Workspace-Id' => '999']);
 
-        $this->assertRejected($response, 503, 'gate_unavailable');
+        $this->assertMisconfigured($response);
         $this->assertFalse($this->reachedDomain);
         $this->assertLoggedError('no es un id');
     }
 
-    public function test_un_503_por_el_workspace_no_gasta_el_tope(): void
+    public function test_un_rechazo_por_el_workspace_no_gasta_el_tope(): void
     {
         config(['platform-gate.daily_call_cap' => 1]);
         $this->app->forgetInstance(\Funnelchat\PlatformGate\Limits\DailyCallCap::class);
         $this->app->forgetScopedInstances();
 
-        $this->assertRejected($this->gateSees($this->key(['workspace_id' => 'abc'])), 503, 'gate_unavailable');
+        $this->assertMisconfigured($this->gateSees($this->key(['workspace_id' => 'abc'])));
         $this->app->forgetScopedInstances();
         $this->assertSame(200, $this->gateSees($this->key(['workspace_id' => 7]))->getStatusCode());
         $this->app->forgetScopedInstances();

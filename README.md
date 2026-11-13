@@ -140,11 +140,17 @@ están en Laravel 12.
 ```
 
 **`allowed` es obligatoria para que una key llegue a algo.** Lo que no machea ahí se
-rechaza como si no existiera (403 `route_not_available`), y una lista vacía no deja
-**ninguna** ruta alcanzable: un dominio que no declara su superficie no expone nada. Así
-una ruta nueva nace denegada. Abrir todo es `['*']`, y es algo que hay que escribir. Sólo
+rechaza con 403 `route_not_available`, y una lista vacía no deja **ninguna** ruta
+alcanzable: un dominio que no declara su superficie no expone nada. Así una ruta nueva nace
+denegada. Abrir todo es `['*']`, y es algo que hay que escribir. Sólo
 afecta a llamadores `api_key`: el front no pasa por esta lista. `denied` se evalúa antes,
 para poder excluir algo que machearía un patrón amplio.
+
+**Una ruta cerrada no es secreta.** No es «como si no existiera»: una ruta que no existe da el
+404 del dominio y una cerrada, el 403 `route_not_available`, así que quien tiene una key puede
+saber qué rutas hay —sus URI, no lo que devuelven—. Es a propósito: el portal documenta el 403,
+que le dice a quien integra que no hay permiso que pedir. Lo que no tiene que conocerse no se
+esconde sacándolo de `allowed`. Hasta 0.10.0 este README y la config prometían lo contrario.
 
 **Dentro de `allowed`, el permiso sale del método HTTP** y no hay que declararlo:
 `GET`/`HEAD`/`OPTIONS` piden `{dominio}:read`, todo lo demás `{dominio}:write`. Declarar
@@ -163,6 +169,14 @@ decidido.
 igual. Es una defensa, no comodidad — con matcheo literal, un patrón con el nombre
 equivocado no falla ruidosamente: cae en la regla por método HTTP y puede clasificar una
 ruta de envío como escritura. Hay un test de regresión.
+
+**Un patrón con método cubre el verbo hermano de la misma ruta** (0.11.0): `GET …` cubre el
+`HEAD`, y `PUT …` y `PATCH …` se cubren entre sí. Laravel le agrega `HEAD` a toda ruta `GET`, y
+`Route::resource` registra el update como `PUT|PATCH`: es una ruta con dos verbos, y declarar
+uno alcanza. Hasta 0.10.0 la comparación era literal: `GET …` en `allowed` le daba 403 a un
+`HEAD`, y `PUT …` en `send` u `operate` dejaba el `PATCH` de esa ruta en `write`. Sólo vale
+dentro de la misma ruta: un `PATCH` registrado aparte con el mismo URI es otra ruta, y `PUT …`
+no la cubre.
 
 ### Permiso por ruta: `permission_prefix`
 
@@ -193,7 +207,7 @@ ruta puede declarar otro prefijo, y entonces pide `{prefijo}:{grado}`:
 - **No abre superficie:** la ruta igual tiene que estar en `allowed`, y `denied` gana.
 - **Falla cerrado.** Si el mapa no se puede leer —un valor con `:`, vacío, con mayúsculas o
   espacios, o una lista en vez de un mapa— ninguna ruta se puede clasificar con certeza, y
-  las llamadas de key a rutas de `allowed` reciben 503 `gate_unavailable`. Lo mismo si dos
+  las llamadas de key a rutas de `allowed` reciben 500 `gate_misconfigured`. Lo mismo si dos
   patrones le dan prefijos distintos a la misma ruta: no se elige por orden de declaración.
   Lo que ya estaba denegado sigue en 403.
 
@@ -201,15 +215,15 @@ ruta puede declarar otro prefijo, y entonces pide `{prefijo}:{grado}`:
 
 **`kind`:** sólo hay dos valores de token, `api_key` y `web`. Cualquier otro —uno que esta
 versión no conoce, vacío, o `unverified`, que es un estado del portero y no un valor de la
-columna— es un llamador que el portero no sabe clasificar: responde 503
-`gate_unavailable` y lo deja en el log. No es `web` por descarte, ni una key sin permisos.
+columna— es un llamador que el portero no sabe clasificar: responde 500
+`gate_misconfigured` y lo deja en el log. No es `web` por descarte, ni una key sin permisos.
 
 **Permisos de una key:** el permiso que pide la ruta se busca **literal** en la lista de
 `abilities` del token. `*` es un string más: no habilita nada a una key. La lista sale de
 `getAbilities()` si el modelo lo tiene y, si no, del atributo `abilities` —el
 `PersonalAccessToken` de Sanctum no expone ningún método para leerla—. Si no se puede
-leer (la columna no se selecciona, el valor no es una lista), responde 503
-`gate_unavailable`: no pudo evaluar, y no deja pasar. La misma lista es la que el dominio
+leer (la columna no se selecciona, el valor no es una lista), responde 500
+`gate_misconfigured`: no pudo evaluar, y no deja pasar. La misma lista es la que el dominio
 ve en `Caller::$permissions`.
 
 ### Si tu aplicación restringe columnas en `findToken()`, incluí `kind`, `abilities` y `workspace_id`
@@ -217,8 +231,9 @@ ve en `Caller::$permissions`.
 Una aplicación puede sobreescribir `findToken()` en su modelo `PersonalAccessToken` para
 traer sólo algunas columnas. Si `kind` no está en esa lista, el atributo llega `null` y el
 portero no puede clasificar al llamador. Si falta `abilities`, no puede evaluar los
-permisos de una key, y corta con 503. Si falta `workspace_id` y la columna existe en la
-tabla, no sabe de qué workspace es la key, y también corta con 503 (0.9).
+permisos de una key, y corta con 500 `gate_misconfigured`. Si falta `workspace_id` y la
+columna existe en la tabla, no sabe de qué workspace es la key, y también corta con 500 (0.9;
+hasta 0.10.0, los dos eran 503).
 
 ```php
 protected static array $selectColumns = [
@@ -231,7 +246,8 @@ protected static array $selectColumns = [
 columna que no existe rompe la consulta de cada token.
 
 El comportamiento cuando `kind` no se puede leer lo decide `PLATFORM_GATE_BLOCK_ON_UNREADABLE_KIND`.
-En `true`, un token cuyo `kind` no se puede leer devuelve 503 en vez de seguir. Ponelo en
+En `true`, un token cuyo `kind` no se puede leer, con el esquema sin consultar, devuelve 503 en
+vez de seguir (con la columna en la tabla corta siempre, con 500). Ponelo en
 `true` apenas la columna esté desplegada en todos los ambientes.
 
 ### La resolución de cuenta hay que sobreescribirla
@@ -311,8 +327,8 @@ que manda `X-Workspace-Id: B` tiene que operar en A.
 —un job encolado antes de subir— se lee con `null`, o sea el por defecto.
 
 Si el token de una key no trae `workspace_id` y la columna **existe**, o trae algo que no es un
-id, el portero no sabe de qué workspace es la key: responde 503 `gate_unavailable` y lo deja en
-el log. No la manda al por defecto, porque una key de otro workspace operaría ahí sin ninguna
+id, el portero no sabe de qué workspace es la key: responde 500 `gate_misconfigured` (503
+`gate_unavailable` si además no pudo consultar el esquema) y lo deja en el log. No la manda al por defecto, porque una key de otro workspace operaría ahí sin ninguna
 señal.
 
 ---
@@ -343,7 +359,7 @@ purga.
 ### El id del pedido: `X-Request-Id`
 
 Cada respuesta que pasa por `TrustEdge` o por el portero trae `X-Request-Id`: las que
-contesta el dominio, un 500, y los rechazos del propio portero (403, 429, 503). El 401 de
+contesta el dominio, un 500, y los rechazos del propio portero (403, 429, 500, 503). El 401 de
 `UnauthenticatedResponse` también. Es el id que el integrador cita al reportar un problema, y
 con el que soporte encuentra la fila y los logs.
 
@@ -501,7 +517,7 @@ Generalo con `openssl rand -hex 32`.
 no llega con el secreto válido recibe 403 `use_public_endpoint`, con la URL pública en el
 mensaje (`PUBLIC_API_URL`). A la sesión del panel (`web`) nunca se le pide el secreto. Si la
 exigencia está encendida y el dominio no tiene ningún secreto configurado, el portero no
-tiene contra qué comparar: 503 `gate_unavailable`, nunca dejar pasar.
+tiene contra qué comparar: 500 `gate_misconfigured`, nunca dejar pasar.
 
 **`TrustEdge` y el portero.** `TrustEdge` es el middleware global que hace la inspección
 para todo el pedido. Si el dominio no lo monta, el portero la hace igual al correr —la
@@ -516,10 +532,11 @@ host interno y la IP del Worker.
 |---|---|---|---|
 | Sin credencial o credencial inválida en `api/*` (con `UnauthenticatedResponse` enganchado) | 401 | `unauthenticated` | Terminal |
 | Le falta el permiso | 403 | `permission_denied` | Terminal |
-| Ruta fuera de `allowed`, o de la superficie amplificada | 403 | `route_not_available` | Terminal — no hay permiso que pedir |
+| Ruta fuera de `allowed`, o de la superficie amplificada | 403 | `route_not_available` | Terminal — no hay permiso que pedir. Distinto del 404 de una ruta que no existe |
 | Una key llegó directo a un host interno y el dominio exige el borde | 403 | `use_public_endpoint` | Terminal — hay que cambiar la URL |
 | Se pasó del tope diario (por key y por dominio) | 429 + `Retry-After` | `daily_cap_exceeded` | Terminal hasta las 00:00 UTC |
-| **No se pudo evaluar** | 503 + `Retry-After` | `gate_unavailable` | **Reintentable** |
+| **No se pudo evaluar, por algo que se arregla solo** | 503 + `Retry-After` | `gate_unavailable` | **Reintentable** |
+| **No se pudo evaluar, por un error de configuración nuestro** (0.11.0) | 500, sin `Retry-After` | `gate_misconfigured` | **No reintentable** — hasta que lo corrijamos |
 
 Todas llevan `X-Request-Id` (0.8).
 
@@ -555,16 +572,32 @@ PermissionLabels::for('accounts:send');    // null: el panel no lo ofrece
 
 Con `null`, el texto es genérico; nunca se cae al literal.
 
-"No se pudo evaluar" incluye: el store del contador no responde, `kind` no se puede leer o
-tiene un valor desconocido, la lista de permisos de la key no se puede leer, el workspace de
-la key no se puede leer (0.9),
-`permission_prefix` no se puede leer o le da dos prefijos a la misma ruta, y la exigencia
-del borde está encendida sin ningún secreto configurado.
+"No se pudo evaluar" son dos casos, con dos respuestas (0.11.0):
+
+- **503 `gate_unavailable`, con `Retry-After: 5`:** lo que se arregla solo. El store del
+  contador no responde; o falta `kind` o `workspace_id` en el token y el esquema de la base no
+  se pudo consultar para saber por qué.
+- **500 `gate_misconfigured`, sin `Retry-After`:** lo que no se arregla esperando, porque es la
+  config o el código del dominio, o el dato guardado en el token. `kind` con un valor que esta
+  versión no conoce, o que el modelo no selecciona (la columna existe); la lista de permisos de
+  la key que no se puede leer; el `workspace_id` que el modelo no selecciona o que no es un id;
+  `permission_prefix` ilegible o con dos prefijos para la misma ruta; la exigencia del borde
+  encendida sin ningún secreto; el portero montado donde no hay ruta resuelta.
+
+  ```json
+  {"error": "gate_misconfigured", "message": "No pudimos validar esta llamada por un problema de configuración de nuestro lado. Reintentar no lo resuelve: escribile a soporte de Funnelchat con el X-Request-Id de esta respuesta."}
+  ```
+
+Hasta 0.10.0 todo salía como el primero, y un cliente que seguía la documentación reintentaba
+cada cinco segundos para siempre. Es 500 y no 503 porque 503 dice «por ahora» y los clientes HTTP
+lo reintentan solos. Las dos son `GateUnavailable` en el código —`GateMisconfigured` la
+extiende—, así que el dominio que la atrapaba sigue atrapando las dos. Las dos quedan en el log
+con su `stage`.
 
 El 401 lo tira el `auth:sanctum` del dominio, antes de que corra el portero; por eso es algo
 que el dominio engancha. Fuera de `api/*` no cambia nada.
 
-La última es la que importa: si el store se cae, **corta, no deja pasar**. Dejar pasar
+En los dos casos, **corta, no deja pasar**: si el store se cae, también. Dejar pasar
 cuando no se puede evaluar es el agujero clásico — el cliente automatizado se pasa del
 límite justo cuando el control no responde. Y "no pude evaluar" nunca se colapsa con
 "evalué y está denegado": son dos respuestas para el cliente y dos métricas para vos.
@@ -705,13 +738,96 @@ Eso engancha la API por defecto de Scramble. Si el dominio publica otra
 A cada respuesta 4xx o 5xx con cuerpo `application/json` que sea un objeto sin `error` —las
 `*Exception` de `components.responses` y las de cada operación— le agrega `error`: primera
 propiedad, obligatoria, string, con el código genérico de su status como ejemplo y, en el 403, el
-429 y el 503, los códigos del portero que pueden salir con ese status. Si el cuerpo trae `code`,
+429, el 500 y el 503, los códigos del portero que pueden salir con ese status. Si el cuerpo trae `code`,
 `error` lleva lo mismo. Lo que ya trae `error`, un cuerpo que es una referencia a un esquema, una
 lista o algo que no es JSON no se toca. **Los códigos propios de cada ruta los documenta el
 dominio.**
 
 La librería no exige Scramble: `AddErrorCode` no implementa nada suyo y sólo se carga si el
 dominio lo usa. Probado con Scramble 0.12.36 y 0.13.53.
+
+---
+
+## Actualizar desde 0.10.0
+
+Versión **0.11.0**. Sin cambios de config ni migraciones, pero **puede romper a un consumidor**, y
+por eso es MINOR y no PATCH: cambian algunas respuestas a llamadas con key —todas en casos que
+estaban mal— y `Event` rechaza payloads que antes dejaba salir. Antes de subir, revisá los tests del
+dominio que comparan esas respuestas y los payloads de sus eventos (abajo).
+
+**Por qué.** La revisión de huecos del 13-11 (iniciativa api-abierta; `HUECOS-2026-11-13.md` y el
+barrido `huecos-1113/barrido-portal-borde-gate.txt`, puntos 7, 9, 10 y 11, en el repo de
+coordinación) encontró cinco lugares donde la librería no hacía lo que decía. Es la segunda rueda
+del contrato `1113-errores-y-limites` (commit `ce7a8c73265d` del repo de coordinación), después de
+0.10.0:
+
+1. **Los patrones con método comparaban el verbo literal.** `GET …` en `allowed` le daba 403 a un
+   `HEAD`, y `PUT …` en `send` u `operate` dejaba en `write` el `PATCH` de la misma ruta —las rutas
+   `resource` de Laravel registran el update con los dos verbos—: un grado menor por cambiar el
+   verbo.
+2. **«Como si no existiera» no era cierto.** El README y la config lo prometían para lo que queda
+   fuera de `allowed`, pero la respuesta es 403 `route_not_available` y una ruta inexistente da el
+   404 del dominio: se puede saber qué rutas hay. El portal documenta el 403, así que se queda; lo
+   que cambia es la promesa. Y el mensaje decía «en el piloto», con la API ya en producción.
+3. **La lista de claves prohibidas del sobre se podía saltear.** Sólo recorría arrays y comparaba
+   el nombre exacto: pasaban `userId`, `accountId` y cualquier objeto —`stdClass`,
+   `JsonSerializable`, un Resource— con `user_id` adentro, que `toJson()` igual mandaba.
+4. **Los errores de configuración invitaban a reintentar para siempre.** Respondían 503
+   `gate_unavailable` con `Retry-After: 5`, documentado como reintentable: un cliente que seguía
+   la doc reintentaba cada cinco segundos algo que sólo se arregla corrigiendo el dominio.
+5. **No existían los vectores de prueba de la firma** que este repo dice compartir con los
+   snippets del portal y otras implementaciones: sólo había casos sueltos dentro de un test.
+
+**Qué cambia:**
+
+- **Patrones:** `GET …` cubre el `HEAD`, y `PUT …` y `PATCH …` se cubren entre sí, cuando la ruta
+  resuelta acepta los dos verbos. Ver «Configuración».
+- **El texto del 403 `route_not_available`:** «Esta ruta no está disponible para API keys. No es un
+  permiso que falte: ninguna key la habilita.» (sin «en el piloto»). `error` y el status no
+  cambian.
+- **`Event`** revisa lo que va a salir en el JSON —objetos incluidos— y compara los cuatro nombres
+  prohibidos sin importar cómo se escriban. Ver «La lista de claves prohibidas es un piso».
+- **`500 gate_misconfigured`, nuevo, sin `Retry-After`**, para lo que no se arregla esperando:
+  `kind` desconocido o no seleccionado, la lista de permisos ilegible, el `workspace_id` no
+  seleccionado o que no es un id, `permission_prefix` ilegible o ambiguo, la exigencia del borde
+  sin secreto y el portero sin ruta resuelta. **503 `gate_unavailable`** queda para lo que se
+  arregla solo: el store del contador, y el esquema de la base que no se pudo consultar. Ver
+  «Respuestas de rechazo». En el código, `GateMisconfigured` extiende `GateUnavailable`: un
+  `catch (GateUnavailable)` sigue atrapando las dos, y `$stage` no cambia.
+- `AddErrorCode` documenta `gate_misconfigured` en las respuestas 500.
+- **`tests/vectors/webhook-signature.json`**, nuevo: los vectores de la firma `v1`, con los que
+  prueba `Signature` y contra los que tienen que probar los snippets del portal. La firma no
+  cambia.
+- No cambian `Caller`, `api_call_log`, el tope, los permisos ni los demás códigos. El panel
+  tampoco, salvo en un caso roto: un token cuyo `kind` no se puede leer con la columna en la tabla,
+  o con un valor que esta versión no conoce, recibe 500 en vez de 503, sea de quien sea —el
+  portero no sabe si es el panel—.
+
+**Antes de subir, en el dominio:**
+
+1. **Tests que esperan 503 `gate_unavailable`** (o `Retry-After: 5`) en un caso de configuración
+   de la lista de arriba: ahora es 500 `gate_misconfigured`, sin `Retry-After`.
+2. **Tests que comparan el texto del 403 `route_not_available`**: que comparen `error`.
+3. **Payloads de eventos.** Si alguno lleva `userId`, `accountId`, `ownerId`, `tokenableId` —o
+   esos nombres con otra grafía— o un objeto con alguno de los cuatro adentro, construir el `Event`
+   ahora tira y el aviso no sale. Hasta ahora se mandaban al cliente, que es justo lo que la
+   regla prohíbe. Correr los tests de payloads del dominio antes de subir.
+4. **`PUT …` en `send`, `operate` o `denied` sobre una ruta `resource`:** el `PATCH` de esa ruta
+   pasa a pedir el mismo grado —o a quedar cerrado—. Una key con sólo `write` que usaba `PATCH`
+   ahí recibe 403. Era el agujero; conviene saber si alguna integración lo usaba.
+5. **Alertas:** los errores de configuración salen como 500. Que el monitoreo de 5xx los vea.
+
+**Cómo subir.** Cambiar la restricción a `^0.11` —`^0.10` no la toma— y
+`composer update funnelchat20/platform-gate`. Un dominio que todavía está en 0.9.x sube directo a
+0.11.0, siguiendo también «Actualizar desde 0.9».
+
+**Orden.**
+
+1. Se publica 0.11.0. Nadie cambia hasta subir.
+2. accounts, conversations y communities, en cualquier orden.
+3. El portal documenta `500 gate_misconfigured` (no reintentable), el texto nuevo del 403 y que
+   una ruta cerrada responde 403, no 404, cuando suba el primer dominio. Sus snippets de firma
+   pueden probarse contra los vectores desde ya: la firma no cambió.
 
 ---
 
@@ -1231,10 +1347,10 @@ arrastrar a los demás.
 | Regla | Cómo se hace cumplir |
 |---|---|
 | `recurso.hecho_en_pasado`, minúsculas | `EventName::from()` tira si no machea |
-| **Sin `user_id`, `account_id`, `owner_id`, `tokenable_id`** en `data`, ni anidados | El constructor de `Event` recorre el payload y tira |
+| **Sin `user_id`, `account_id`, `owner_id`, `tokenable_id`** en `data`, ni anidados, ni escritos de otra forma (`userId`, `OWNER-ID`), ni dentro de un objeto | El constructor de `Event` revisa lo que va a salir en el JSON y tira (0.11.0) |
 | `workspace_id` **sí** puede ir en `data` (0.9.1): dice a qué workspace se ruteó el aviso | No se valida; la suscripción sigue siendo de un workspace |
 | Esa lista es un **piso, no un techo** | Cada aplicación agrega la suya y la hace cumplir con su propio test |
-| Firma `t=…,v1=…` sobre `t + "." + cuerpo` | `Signature` — el timestamp va adentro de lo firmado; si no, una entrega capturada se reenvía para siempre |
+| Firma `t=…,v1=…` sobre `t + "." + cuerpo` | `Signature` — el timestamp va adentro de lo firmado; si no, una entrega capturada se reenvía para siempre. Los vectores de prueba compartidos están en `tests/vectors/webhook-signature.json` (0.11.0) |
 | Verificación en tiempo constante | `hash_equals`, con ventana de tolerancia de 5 min |
 | Suscripción **por tipo** | `Subscription::wants()`. Acepta `recurso.*`; `*` a secas **no existe** |
 | Tres reintentos con espera creciente: 1m, 5m, 30m | `RetryPolicy`. Sólo 5xx, 429 y errores de red |
@@ -1247,6 +1363,16 @@ o tres veces por cada operación. Que se pida explícitamente evita que quien co
 descubra por un timeout de su propio lado.
 
 ## La lista de claves prohibidas es un piso
+
+**Lo que la librería revisa** (0.11.0): lo que va a salir en el JSON de `toJson()`, no la
+estructura de PHP. Un `stdClass`, un `JsonSerializable` —un Resource de Laravel— o las
+propiedades públicas de un objeto llegan al cliente con sus claves igual que un array, así que
+se revisan igual. Y el nombre se compara sin lo que no lo cambia: mayúsculas, guiones, espacios o
+`camelCase` (`userId`, `USER-ID` y `user id` son `user_id`). Hasta 0.10.0 se recorrían sólo los
+arrays y se comparaba el nombre exacto: un `userId`, o un Resource con `user_id` adentro, pasaban.
+
+Son esos cuatro nombres y nada más: `user_ids`, `assigned_user_id` o `contactId` no son de la
+lista, y `workspace_id` sigue permitido.
 
 La librería rechaza lo que es peligroso en cualquier aplicación. **No puede ir más allá**,
 porque no sabe qué entidad es de quién.

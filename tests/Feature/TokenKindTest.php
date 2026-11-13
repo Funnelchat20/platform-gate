@@ -24,14 +24,14 @@ final class TokenKindTest extends GateTestCase
     public function test_un_kind_desconocido_no_es_web_y_corta(string $kind): void
     {
         // Sólo `api_key` y `web` son valores de token. Cualquier otro es un llamador que el
-        // portero no sabe clasificar: "no pude evaluar", 503 reintentable y error en el log.
+        // portero no sabe clasificar: "no pude evaluar", sin invitar a reintentar —el valor
+        // está guardado en el token— y error en el log.
         // Ni `web` (que no se chequea) ni una key inventada.
         $token = $this->token(['kind' => $kind, 'abilities' => ['*']]);
 
         $response = $this->send('POST', 'api/v1/groups', $token);
 
-        $this->assertRejected($response, 503, 'gate_unavailable');
-        $this->assertSame('5', $response->headers->get('Retry-After'));
+        $this->assertMisconfigured($response);
         $this->assertSame(CallerKind::Unverified, $this->caller()->kind);
         $this->assertLoggedError('`kind` desconocido');
     }

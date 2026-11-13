@@ -394,6 +394,56 @@ final class RoutePermissionsTest extends TestCase
         }
     }
 
+    public function test_get_cubre_el_head_de_la_misma_ruta(): void
+    {
+        // Laravel le agrega HEAD a toda ruta GET. Con la comparación literal, `GET …` en
+        // `allowed` le daba 403 a un HEAD (0.11.0).
+        $routes = new RoutePermissions('accounts', allowed: ['GET api/v1/devices']);
+
+        $this->assertSame('accounts:read', $routes->requiredFor($this->requestTo(['GET'], 'HEAD', 'api/v1/devices')));
+    }
+
+    public function test_put_en_send_u_operate_cubre_el_patch_de_la_misma_ruta(): void
+    {
+        // `Route::resource` registra el update como PUT|PATCH: una ruta, dos verbos. Con la
+        // comparación literal, el PATCH caía en `write`: un grado menor por cambiar el verbo.
+        $routes = new RoutePermissions(
+            'accounts',
+            send: ['PUT api/v1/templates/{template}'],
+            operate: ['PUT api/v1/devices/{device}'],
+            allowed: self::EVERYTHING,
+        );
+
+        $this->assertSame('accounts:send', $routes->requiredFor($this->requestTo(['PUT', 'PATCH'], 'PATCH', 'api/v1/templates/{template}')));
+        $this->assertSame('accounts:operate', $routes->requiredFor($this->requestTo(['PUT', 'PATCH'], 'PATCH', 'api/v1/devices/{device}')));
+    }
+
+    public function test_patch_declarado_cubre_el_put_de_la_misma_ruta(): void
+    {
+        $routes = new RoutePermissions('accounts', operate: ['PATCH api/v1/devices/{device}'], allowed: self::EVERYTHING);
+
+        $this->assertSame('accounts:operate', $routes->requiredFor($this->requestTo(['PUT', 'PATCH'], 'PUT', 'api/v1/devices/{device}')));
+    }
+
+    public function test_put_en_denied_tambien_cierra_el_patch_de_la_misma_ruta(): void
+    {
+        $routes = new RoutePermissions('accounts', denied: ['PUT api/v1/devices/{device}'], allowed: self::EVERYTHING);
+
+        $this->expectException(RouteNotAvailable::class);
+
+        $routes->requiredFor($this->requestTo(['PUT', 'PATCH'], 'PATCH', 'api/v1/devices/{device}'));
+    }
+
+    public function test_el_verbo_hermano_no_abre_otra_ruta_con_el_mismo_uri(): void
+    {
+        // Un PATCH registrado aparte es otra ruta, que `PUT …` no nombró: abrir una no abre la otra.
+        $routes = new RoutePermissions('accounts', allowed: ['PUT api/v1/devices/{device}']);
+
+        $this->expectException(RouteNotAvailable::class);
+
+        $routes->requiredFor($this->requestTo(['PATCH'], 'PATCH', 'api/v1/devices/{device}'));
+    }
+
     private function assertUnavailable(string $stage, RoutePermissions $routes, string $method, string $uri): void
     {
         try {
@@ -411,6 +461,16 @@ final class RoutePermissionsTest extends TestCase
     {
         $request = Request::create('/'.str_replace(['{', '}'], '', $uri), $method);
         $route = new Route([$method], $uri, static fn () => null);
+        $request->setRouteResolver(static fn () => $route);
+
+        return $request;
+    }
+
+    /** @param string[] $routeMethods los verbos con los que se registró la ruta */
+    private function requestTo(array $routeMethods, string $method, string $uri): Request
+    {
+        $request = Request::create('/'.str_replace(['{', '}'], '', $uri), $method);
+        $route = new Route($routeMethods, $uri, static fn () => null);
         $request->setRouteResolver(static fn () => $route);
 
         return $request;

@@ -1,0 +1,194 @@
+{
+  "_doc": "Vectores de la firma de los webhooks de Funnelchat (X-Funnelchat-Signature, esquema v1). Son un contrato: los usan los tests de platform-gate, y los tienen que pasar los snippets de verificación del portal y cualquier otra implementación. Cambian sólo con una versión nueva de platform-gate y una nota en su README. Los secretos son de prueba.",
+  "since": "0.11.0",
+  "header_name": "X-Funnelchat-Signature",
+  "header_format": "t=<segundos unix>,v1=<hex>",
+  "algorithm": "v1 = HMAC-SHA256(secreto, t + \".\" + cuerpo), en hexadecimal minúscula. Cuerpo y secreto, en bytes UTF-8, tal cual llegaron.",
+  "verification": "Válida si la cabecera trae t (sólo dígitos) y v1, |now - t| <= tolerance, y v1 coincide, comparado en tiempo constante. Las partes se separan por coma, con o sin espacios, en cualquier orden; las que no se conocen se ignoran.",
+  "default_tolerance_seconds": 300,
+  "sign": [
+    {
+      "name": "un evento",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "timestamp": 1789131830,
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola\"}}",
+      "header": "t=1789131830,v1=51311886fe3c3ad1fda870687ae884f71e9f3fc26153a050f8a761950fadd459"
+    },
+    {
+      "name": "acentos y emoji sin escapar: se firman los bytes UTF-8 tal cual",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "timestamp": 1789131830,
+      "payload": "{\"id\":\"evt_2b7d1c9e0f3a4b5c6d7e8f90\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"text\":\"¿Llegó? 👍\"}}",
+      "header": "t=1789131830,v1=1769cfb2440f815881f8a2d278662b285564ef9689bd020e6da3cd697a956c5a"
+    },
+    {
+      "name": "barras sin escapar",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "timestamp": 1789131830,
+      "payload": "{\"id\":\"evt_5e6f7a8b9c0d1e2f3a4b5c6d\",\"type\":\"broadcast.finished\",\"version\":1,\"occurred_at\":\"2026-11-13T03:00:00Z\",\"data\":{\"url\":\"https://n8n.example/webhook/abc\"}}",
+      "header": "t=1789131830,v1=c3ae864f1ba93d6e5cb5dc94b245a377a71efdd02f92b5e8eccfc5e7fd8ec6d6"
+    },
+    {
+      "name": "un objeto vacío, con otro secreto y otro momento",
+      "secret": "otro-secreto-de-prueba",
+      "timestamp": 1700000000,
+      "payload": "{}",
+      "header": "t=1700000000,v1=646c899500bae46303c188ee1ac054fc77c775a4afa4dbbc6385acfc9572145b"
+    }
+  ],
+  "verify": [
+    {
+      "name": "recién firmada",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola\"}}",
+      "header": "t=1789131830,v1=51311886fe3c3ad1fda870687ae884f71e9f3fc26153a050f8a761950fadd459",
+      "now": 1789131830,
+      "tolerance": 300,
+      "valid": true
+    },
+    {
+      "name": "en el borde de la tolerancia: llegó 300 s después",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola\"}}",
+      "header": "t=1789131830,v1=51311886fe3c3ad1fda870687ae884f71e9f3fc26153a050f8a761950fadd459",
+      "now": 1789132130,
+      "tolerance": 300,
+      "valid": true
+    },
+    {
+      "name": "un segundo pasada la tolerancia: se rechaza aunque la firma sea buena",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola\"}}",
+      "header": "t=1789131830,v1=51311886fe3c3ad1fda870687ae884f71e9f3fc26153a050f8a761950fadd459",
+      "now": 1789132131,
+      "tolerance": 300,
+      "valid": false
+    },
+    {
+      "name": "reloj del emisor adelantado, en el borde",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola\"}}",
+      "header": "t=1789131830,v1=51311886fe3c3ad1fda870687ae884f71e9f3fc26153a050f8a761950fadd459",
+      "now": 1789131530,
+      "tolerance": 300,
+      "valid": true
+    },
+    {
+      "name": "reloj del emisor adelantado, un segundo de más",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola\"}}",
+      "header": "t=1789131830,v1=51311886fe3c3ad1fda870687ae884f71e9f3fc26153a050f8a761950fadd459",
+      "now": 1789131529,
+      "tolerance": 300,
+      "valid": false
+    },
+    {
+      "name": "el cuerpo cambió un byte",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola!\"}}",
+      "header": "t=1789131830,v1=51311886fe3c3ad1fda870687ae884f71e9f3fc26153a050f8a761950fadd459",
+      "now": 1789131830,
+      "tolerance": 300,
+      "valid": false
+    },
+    {
+      "name": "firmada con otro secreto",
+      "secret": "otro-secreto-de-prueba",
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola\"}}",
+      "header": "t=1789131830,v1=51311886fe3c3ad1fda870687ae884f71e9f3fc26153a050f8a761950fadd459",
+      "now": 1789131830,
+      "tolerance": 300,
+      "valid": false
+    },
+    {
+      "name": "el cuerpo re-serializado con escapes no vale: se verifica el cuerpo crudo",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_2b7d1c9e0f3a4b5c6d7e8f90\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"text\":\"\\u00bfLleg\\u00f3? \\ud83d\\udc4d\"}}",
+      "header": "t=1789131830,v1=1769cfb2440f815881f8a2d278662b285564ef9689bd020e6da3cd697a956c5a",
+      "now": 1789131830,
+      "tolerance": 300,
+      "valid": false
+    },
+    {
+      "name": "el cuerpo crudo con acentos sí vale",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_2b7d1c9e0f3a4b5c6d7e8f90\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"text\":\"¿Llegó? 👍\"}}",
+      "header": "t=1789131830,v1=1769cfb2440f815881f8a2d278662b285564ef9689bd020e6da3cd697a956c5a",
+      "now": 1789131830,
+      "tolerance": 300,
+      "valid": true
+    },
+    {
+      "name": "espacio después de la coma",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola\"}}",
+      "header": "t=1789131830, v1=51311886fe3c3ad1fda870687ae884f71e9f3fc26153a050f8a761950fadd459",
+      "now": 1789131830,
+      "tolerance": 300,
+      "valid": true
+    },
+    {
+      "name": "el orden de las partes no importa",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola\"}}",
+      "header": "v1=51311886fe3c3ad1fda870687ae884f71e9f3fc26153a050f8a761950fadd459,t=1789131830",
+      "now": 1789131830,
+      "tolerance": 300,
+      "valid": true
+    },
+    {
+      "name": "un esquema que no se conoce no molesta: se valida v1",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola\"}}",
+      "header": "t=1789131830,v1=51311886fe3c3ad1fda870687ae884f71e9f3fc26153a050f8a761950fadd459,v2=0000",
+      "now": 1789131830,
+      "tolerance": 300,
+      "valid": true
+    },
+    {
+      "name": "el timestamp de la cabecera es el que se firmó: cambiarlo invalida",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola\"}}",
+      "header": "t=1789131831,v1=51311886fe3c3ad1fda870687ae884f71e9f3fc26153a050f8a761950fadd459",
+      "now": 1789131831,
+      "tolerance": 300,
+      "valid": false
+    },
+    {
+      "name": "sin t",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola\"}}",
+      "header": "v1=51311886fe3c3ad1fda870687ae884f71e9f3fc26153a050f8a761950fadd459",
+      "now": 1789131830,
+      "tolerance": 300,
+      "valid": false
+    },
+    {
+      "name": "sin v1",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola\"}}",
+      "header": "t=1789131830",
+      "now": 1789131830,
+      "tolerance": 300,
+      "valid": false
+    },
+    {
+      "name": "t que no es un número",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola\"}}",
+      "header": "t=ayer,v1=51311886fe3c3ad1fda870687ae884f71e9f3fc26153a050f8a761950fadd459",
+      "now": 1789131830,
+      "tolerance": 300,
+      "valid": false
+    },
+    {
+      "name": "cabecera vacía",
+      "secret": "secreto-de-prueba-de-los-vectores",
+      "payload": "{\"id\":\"evt_9f2c4e1a7b3d5f8091a2b3c4\",\"type\":\"message.received\",\"version\":1,\"occurred_at\":\"2026-09-11T17:48:29Z\",\"data\":{\"contact_id\":104816,\"text\":\"hola\"}}",
+      "header": "",
+      "now": 1789131830,
+      "tolerance": 300,
+      "valid": false
+    }
+  ]
+}

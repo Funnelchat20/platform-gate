@@ -39,16 +39,16 @@ final class ApiKeyAbilitiesTest extends GateTestCase
         $this->assertFalse($caller->can('communities:send'));
     }
 
-    public function test_si_no_puede_leer_la_lista_de_la_key_corta_con_503(): void
+    public function test_si_no_puede_leer_la_lista_de_la_key_corta_como_error_de_configuracion(): void
     {
         // El dominio no selecciona `abilities` (o el modelo no la expone): no hay con qué
-        // evaluar. Se corta, reintentable — ni 403, ni dejar pasar, ni un 500.
+        // evaluar. Se corta —ni 403, ni dejar pasar— y no invita a reintentar: el modelo no
+        // cambia solo (0.11.0).
         $token = $this->token(['kind' => 'api_key']);
 
         $response = $this->send('GET', 'api/v1/groups', $token);
 
-        $this->assertRejected($response, 503, 'gate_unavailable');
-        $this->assertSame('5', $response->headers->get('Retry-After'));
+        $this->assertMisconfigured($response);
         $this->assertNotSame(CallerKind::ApiKey, $this->caller()->kind);
     }
 }
