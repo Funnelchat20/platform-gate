@@ -24,6 +24,9 @@ final class DailyCallCapTest extends TestCase
         } catch (DailyCapExceeded $e) {
             $this->assertSame(429, $e->status());
             $this->assertGreaterThan(0, $e->retryAfter());
+            // 0.10: el texto dice que es por dominio y cuándo se reinicia, no sólo «diarias».
+            $this->assertStringContainsString('por clave y por dominio', $e->getMessage());
+            $this->assertStringContainsString('00:00 UTC', $e->getMessage());
             throw $e;
         }
     }

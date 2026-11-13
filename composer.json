@@ -11,8 +11,12 @@
         "laravel/sanctum": "^4.0"
     },
     "require-dev": {
+        "dedoc/scramble": "^0.12|^0.13",
         "orchestra/testbench": "^9.0|^10.0",
         "phpunit/phpunit": "^11.0"
+    },
+    "suggest": {
+        "dedoc/scramble": "Para que el OpenAPI del dominio muestre `error` en las respuestas de error (OpenApi\\AddErrorCode, 0.10)."
     },
     "autoload": {
         "psr-4": {

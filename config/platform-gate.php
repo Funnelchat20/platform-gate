@@ -154,11 +154,15 @@ return [
 
     /*
     |---------------------------------------------------------------------------
-    | Tope diario de llamadas por key
+    | Tope diario de llamadas por key, en este dominio
     |---------------------------------------------------------------------------
     | ⚠️ Cuenta LLAMADAS, no mensajes: es control de costo y abuso, NO un freno de
     | envío (ver la advertencia en DailyCallCap). El freno de envío vive en la
     | costura de salida de cada dominio.
+    |
+    | Es por key Y POR DOMINIO: cada dominio cuenta en su store (`cache_store`),
+    | así que una key puede agotarlo en uno y seguir andando en otro. Se reinicia
+    | a las 00:00 UTC.
     |
     | 0 = sin tope. Los overrides son por key y se tocan sin deploy.
     */

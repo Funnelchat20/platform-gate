@@ -14,6 +14,7 @@ use Funnelchat\PlatformGate\Edge\EdgeTrust;
 use Funnelchat\PlatformGate\Exceptions\GateException;
 use Funnelchat\PlatformGate\Exceptions\GateUnavailable;
 use Funnelchat\PlatformGate\Exceptions\UsePublicEndpoint;
+use Funnelchat\PlatformGate\Http\ErrorBody;
 use Funnelchat\PlatformGate\Http\RequestId;
 use Funnelchat\PlatformGate\Limits\DailyCallCap;
 use Funnelchat\PlatformGate\Permissions\PermissionChecker;
@@ -102,7 +103,16 @@ final class PlatformGate
             return $this->requestIds->stamp($request, $this->reject($e));
         }
 
-        return $this->requestIds->stamp($request, $next($request));
+        $response = $next($request);
+
+        // El formato de error de las llamadas con key (0.10): lo que el dominio arma a mano sin
+        // `error` —o lo que Laravel rindió sin `ErrorResponse` enganchado— lo gana acá, sin
+        // perder nada de lo que traía. A quien no es key no se le toca nada.
+        if ($this->context->isMachine()) {
+            $response = ErrorBody::complete($response);
+        }
+
+        return $this->requestIds->stamp($request, $response);
     }
 
     /**

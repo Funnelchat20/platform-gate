@@ -8,7 +8,9 @@ two jobs and nothing else:
 - **The gate:** classifies the caller (`api_key`, `web`, `unverified`), checks the ability a route requires
   (`{domain}:{grade}`, `send` ⇒ `write` ⇒ `read`, plus `operate`), applies the daily call cap per `key_id` and
   writes one `api_call_log` row per call. It reads `personal_access_tokens` directly, with no cache, so a
-  revoked key fails on the next request.
+  revoked key fails on the next request. The cap is counted per domain, by UTC day. Since 0.10 it also gives
+  every error a keyed call receives the `{error, message}` shape (`ErrorResponse`, `ErrorBody`,
+  `OpenApi\AddErrorCode`); calls without a key are never touched.
 - **The webhook standard:** `Event` (envelope `{id, type, version, occurred_at, data}`), `EventName`,
   `Signature` (`X-Funnelchat-Signature: t=…,v1=…`) and `RetryPolicy`.
 
