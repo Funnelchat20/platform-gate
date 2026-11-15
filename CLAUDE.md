@@ -10,7 +10,9 @@ two jobs and nothing else:
   writes one `api_call_log` row per call. It reads `personal_access_tokens` directly, with no cache, so a
   revoked key fails on the next request. The cap is counted per domain, by UTC day. Since 0.10 it also gives
   every error a keyed call receives the `{error, message}` shape (`ErrorResponse`, `ErrorBody`,
-  `OpenApi\AddErrorCode`); calls without a key are never touched.
+  `OpenApi\AddErrorCode`); calls without a key are never touched. Since 0.12, with `public_ids.enabled`, keyed
+  calls see and send opaque ids (`ctc_…`) instead of integers (`PublicIds`, `ResolvePublicIds`,
+  `OpenApi\DocumentPublicIds`); off by default, and off changes nothing.
 - **The webhook standard:** `Event` (envelope `{id, type, version, occurred_at, data}`), `EventName`,
   `Signature` (`X-Funnelchat-Signature: t=…,v1=…`) and `RetryPolicy`.
 
@@ -45,8 +47,9 @@ A change here does nothing until each consumer upgrades. Never change a consumer
    not only the allow path.
 5. **Shared test vectors are a contract.** Signature and gate vectors consumed by other implementations (the
    Python gate, the portal's signature snippets) change only with a version bump and a note. Signature vectors
-   live in `tests/vectors/webhook-signature.json` (since 0.11.0, exercised by `SignatureVectorsTest`); gate
-   vectors do not exist yet.
+   live in `tests/vectors/webhook-signature.json` (since 0.11.0, exercised by `SignatureVectorsTest`); public-id
+   vectors in `tests/vectors/public-ids.json` (since 0.12.0, exercised by `PublicIdVectorsTest`); gate vectors do
+   not exist yet.
 6. **No secrets in code, fixtures or logs.** Secrets come from the consuming app's config/env.
 7. **No `git push`, no `gh pr create`, no tags pushed** without the Issue–PR Gate and the dev's explicit
    approval.

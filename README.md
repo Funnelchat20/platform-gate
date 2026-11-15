@@ -22,6 +22,7 @@ Cuatro preguntas en cada request: **¿quién sos?**, **¿podés?**, **¿te pasas
 | Devuelve `X-Request-Id` en cada respuesta | Leer el registro: se consulta por SQL |
 | Reconoce lo que llega por el borde (`api.funnelchat.com`) y le cree host e IP | Rutear entre dominios — eso es el Worker |
 | Le dice al dominio de qué workspace es la key, y reemplaza el `X-Workspace-Id` que mande una key | Filtrar por workspace: eso lo hace cada dominio con lo que el portero le deja |
+| Convierte los ids enteros en ids opacos (`ctc_…`) para las keys, si el dominio lo prende (0.12.0) | Saber qué campo es un id: lo declara el dominio, en su Resource, su ruta y su FormRequest |
 
 Los frenos de envío viven en la costura de salida de cada aplicación, no acá y no en la
 ruta: desde la tabla de rutas no se pueden enumerar los caminos de envío, porque hay rutas
@@ -582,7 +583,9 @@ Con `null`, el texto es genérico; nunca se cae al literal.
   versión no conoce, o que el modelo no selecciona (la columna existe); la lista de permisos de
   la key que no se puede leer; el `workspace_id` que el modelo no selecciona o que no es un id;
   `permission_prefix` ilegible o con dos prefijos para la misma ruta; la exigencia del borde
-  encendida sin ningún secreto; el portero montado donde no hay ruta resuelta.
+  encendida sin ningún secreto; el portero montado donde no hay ruta resuelta; los ids públicos
+  prendidos con su config ilegible, o una ruta que declara en `public-ids` un parámetro o un tipo que
+  no existe (0.12.0).
 
   ```json
   {"error": "gate_misconfigured", "message": "No pudimos validar esta llamada por un problema de configuración de nuestro lado. Reintentar no lo resuelve: escribile a soporte de Funnelchat con el X-Request-Id de esta respuesta."}
@@ -745,6 +748,311 @@ dominio.**
 
 La librería no exige Scramble: `AddErrorCode` no implementa nada suyo y sólo se carga si el
 dominio lo usa. Probado con Scramble 0.12.36 y 0.13.53.
+
+---
+
+## Ids públicos: `ctc_…` en lugar de `5`
+
+Desde 0.12.0 (contrato `1411-ids-opacos`), la API pública puede mostrar y recibir los ids como
+texto opaco —`ctc_ABsza6Ialu1BCUyPFZ8WJvV`— en lugar del entero correlativo de la base. **Apagado
+por defecto, y con `public_ids.enabled` apagado no cambia nada**: ni una respuesta, ni un id, ni un
+encabezado. Se prende a la vez en los tres dominios (ver «Actualizar desde 0.11»).
+
+Prendido:
+
+| Quién | Recibe | Manda |
+|---|---|---|
+| Una key | Ids opacos, en las respuestas | Ids opacos, en rutas, cuerpos y filtros. Un entero, sólo mientras rija `accept_legacy_until` |
+| El panel (sesión o token `web`), por las mismas rutas | Enteros, como siempre | Enteros |
+| Quien recibe un webhook | Ids opacos | — |
+
+**El mismo recurso tiene el mismo id en los tres dominios**: el `device_id` que devuelve accounts es
+el que acepta conversations en un envío. Por eso la clave es una sola para los tres, y por eso un
+dominio no puede cambiarle el prefijo a un tipo de la tabla.
+
+### El formato
+
+`<prefijo>_<versión><cuerpo>`, 27 caracteres:
+
+- **prefijo**: tres letras minúsculas por tipo (la tabla, abajo);
+- **versión**: un carácter, la versión de la clave con la que se hizo (`A` es la primera);
+- **cuerpo**: 22 caracteres, un bloque AES-256 de 16 bytes en base62 (`A-Z`, `a-z`, `0-9`, en ese
+  orden, `A` = 0). El bloque lleva el prefijo —el código del tipo—, el entero y cinco bytes en cero
+  de control, y se cifra con `openssl`.
+
+Es **determinista**: el mismo entero del mismo tipo da siempre el mismo id. Y **no se puede
+fabricar ni alterar**: un carácter cambiado, un prefijo cambiado o una versión que no existe dan un
+id inválido. Los vectores de prueba, con los que tiene que coincidir cualquier otra implementación
+(el gate en Python), están en `tests/vectors/public-ids.json`.
+
+Los ids que ya son opacos o de Meta quedan como están: el `uid` de un grupo, el `uuid` de una
+campaña, el `uid` de un mensaje y de una acción de grupo, los ids de WABA.
+
+### Configuración
+
+| Variable | Ajuste (`platform-gate.public_ids.…`) | Qué es |
+|---|---|---|
+| `PLATFORM_GATE_PUBLIC_IDS_ENABLED` | `enabled` | `false` por defecto. Apagado, nada cambia |
+| `PLATFORM_GATE_PUBLIC_ID_KEYS` | `keys` | `A=<64 hex>,B=<64 hex>`: versión ⇒ clave de 32 bytes. **La misma en los tres dominios.** Generala con `openssl rand -hex 32` |
+| `PLATFORM_GATE_PUBLIC_ID_CURRENT_KEY` | `current_key` | La versión con la que se codifica; las demás sólo decodifican. Vacía, la más alta |
+| `PLATFORM_GATE_PUBLIC_IDS_ACCEPT_LEGACY_UNTIL` | `accept_legacy_until` | Hasta cuándo un entero en un pedido de una key se sigue aceptando. Vacía, nunca |
+| — | `types` | Los tipos propios del dominio: nombre ⇒ prefijo |
+| — | `document` | Para Scramble: los ids que no se llaman `<tipo>_id` |
+
+**`accept_legacy_until`** es el momento en que el entero deja de aceptarse: `2026-12-14` son las
+00:00 UTC de ese día (el 13 todavía se acepta), y también vale `2026-12-14T15:00:00Z` o
+`2026-12-14T12:00:00-03:00`. Mientras rija, un entero donde va un id se acepta y la respuesta lleva:
+
+```text
+Deprecation: @1794787200                (RFC 9745: ya está en desuso, al momento de la respuesta)
+Sunset: Mon, 14 Dec 2026 00:00:00 GMT   (RFC 8594: cuándo deja de aceptarse)
+```
+
+Después de esa fecha, un entero es un id inválido como cualquier otro.
+
+**Falla cerrado.** Prendido con algo que no se puede usar —sin claves, una clave que no son 64
+caracteres hex, una versión repetida, `current_key` que no está entre las claves, una fecha que no se
+puede leer, un tipo que choca con otro—, las llamadas con key reciben 500 `gate_misconfigured`, sin
+`Retry-After`, y el log dice qué está mal, nunca la clave. El panel sigue andando. No hay forma de
+contestarle a una key sin dar un entero o rechazar un id válido, y ninguna de las dos se elige. Por
+lo mismo, `forWebhook` tira (`GateMisconfigured`) y el aviso no sale, aunque lo dispare una acción
+del panel: si el dominio arma el aviso dentro del pedido del panel y no en un job, ese pedido falla.
+Por eso la activación verifica la config antes de prender.
+
+**Rotar la clave**, sin cortar:
+
+1. En los tres dominios, agregar la clave nueva (`A=…,B=…`) con `PLATFORM_GATE_PUBLIC_ID_CURRENT_KEY=A`.
+   Todavía nadie codifica con `B`, pero los tres ya la leen.
+2. Cuando los tres la tienen, `PLATFORM_GATE_PUBLIC_ID_CURRENT_KEY=B` en los tres.
+
+**Rotar cambia todos los ids que salen.** Los viejos se siguen aceptando mientras su versión esté en
+la lista, pero quien guardó `ctc_A…` recibe `ctc_B…` para el mismo contacto. Sacar la versión
+vieja de la lista invalida todos sus ids. Hay que avisarlo antes, como un cambio de la API.
+
+### Tipos y prefijos
+
+| Tipo | Prefijo | | Tipo | Prefijo |
+|---|---|---|---|---|
+| `device` (número) | `dev` | | `stage` | `stg` |
+| `contact` | `ctc` | | `board` (tablero) | `knb` |
+| `tag` | `tag` | | `note` | `not` |
+| `custom_field` | `fld` | | `quick_reply` | `qrp` |
+| `template` | `tpl` | | `user` (usuario o agente) | `usr` |
+| `flow` | `flw` | | `plan` | `pln` |
+| `flow_run` (flujo en curso de un contacto) | `run` | | `custom_domain` (dominio propio) | `dom` |
+| `broadcast` (difusión) | `bcs` | | `signup_link` (link de alta) | `lnk` |
+| `folder` | `fdr` | | `message` (id entero) | `msg` |
+| `campaign` (id entero) | `cmp` | | `action` (id entero) | `act` |
+| `pipeline` | `pip` | | `webhook_subscription` | `whk` |
+
+Está en `PublicIdTypes::BASE`. Un dominio suma los suyos en `public_ids.types`
+(`'invoice' => 'inv'`), con un prefijo que se acuerda con la coordinación: la librería sólo ve los
+choques dentro de un dominio. Un tipo de la tabla no puede cambiar de prefijo.
+
+### Cómo lo adopta un dominio
+
+Todo lo de acá se puede hacer con el ajuste apagado: así se despliega, y nada cambia hasta
+prenderlo.
+
+**1. Las respuestas: en el Resource.** El mismo Resource sirve al panel y a las keys; `forResponse`
+decide según quién llama.
+
+```php
+use Funnelchat\PlatformGate\PublicIds\PublicIds;
+
+final class ContactResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id' => PublicIds::forResponse('contact', $this->id),
+            'device_id' => PublicIds::forResponse('device', $this->device_id),
+            'assigned_user_id' => PublicIds::forResponseOrNull('user', $this->assigned_user_id),
+            'name' => $this->name,
+        ];
+    }
+}
+```
+
+`forResponse` no acepta `null` —tira—: para un id que puede faltar está `forResponseOrNull`. Son
+dos para que la documentación diga bien cuál puede ser `null`. Los ids **ajenos** también: el
+`device_id` de un contacto es de accounts, y sale opaco igual.
+
+**2. Las rutas: el middleware `public-ids`.** Se declara qué parámetros son ids y de qué tipo:
+
+```php
+Route::get('contacts/{contact}', [ContactController::class, 'show'])
+    ->middleware('public-ids:contact');                 // el parámetro se llama como el tipo
+
+Route::delete('devices/{id}', [DeviceController::class, 'destroy'])
+    ->middleware('public-ids:id=device');               // parámetro=tipo
+
+Route::get('contacts/{contact}/notes/{note}', [NoteController::class, 'show'])
+    ->middleware('public-ids:contact,note');
+```
+
+Con una key y el ajuste prendido, cada uno se reemplaza por su entero antes de que lo vea nadie: el
+binding de modelos y el controlador reciben lo de siempre. Un valor inválido corta con el 404 de un
+recurso que no existe:
+
+```json
+{"error": "not_found", "message": "No se encontró lo que se pidió."}
+```
+
+- **Corre antes que `SubstituteBindings`**, y el service provider lo pone ahí solo, en la lista de
+  prioridad de Laravel, sin mover nada más. No hay que hacer nada. Si el dominio reemplaza la lista
+  con `priority([...])`, el provider lo agrega después; sólo hace falta que `SubstituteBindings`
+  siga en ella.
+- Como corre antes que el portero, pregunta si el pedido es de una key igual que el formato de
+  error (`ApiKeyRequest`). Con el panel no hace nada.
+- Un parámetro declarado que la ruta no tiene, o un tipo que no existe, es un error del dominio:
+  500 `gate_misconfigured`. No se adivina.
+- Ese 404 no deja fila en `api_call_log`: corta antes que el portero, igual que el 404 del binding
+  de un modelo que no existe.
+
+**3. Los cuerpos y los filtros: `fromRequest`.** En el FormRequest, antes de validar:
+
+```php
+protected function prepareForValidation(): void
+{
+    $this->merge([
+        'device_id' => PublicIds::fromRequest('device', $this->input('device_id')),
+        'tag_ids' => PublicIds::fromRequest('tag', $this->input('tag_ids')),   // una lista también
+    ]);
+}
+```
+
+O en un filtro: `$tagId = PublicIds::fromRequest('tag', $request->query('tag_id'));`.
+
+Un valor que no es un id de ese tipo vuelve como **`PublicIds::NONEXISTENT` (0)**, no como `null`:
+una fila con id 0 no existe, así que la regla `exists`, el `find()` y el filtro se comportan como con
+un id que no existe —que es lo que pide el contrato— y un filtro opcional inválido no se convierte
+en «sin filtro». `null` y `''` vuelven como llegaron: que falten lo decide la validación del
+dominio. Con el panel, o con el ajuste apagado, devuelve el valor sin tocar.
+
+Después de `fromRequest` el valor ya es un entero —o 0—, así que una regla `integer` del dominio
+nunca le contesta a quien integra que el id tiene que ser un número.
+
+**4. Los webhooks: `forWebhook`.** Un aviso no tiene llamador: sale opaco siempre que el ajuste
+esté prendido.
+
+```php
+use Funnelchat\PlatformGate\Webhooks\Event;
+
+Event::make('contact.created', [
+    'contact_id' => PublicIds::forWebhook('contact', $contact->id),
+    'device_id' => PublicIds::forWebhook('device', $contact->device_id),
+    'workspace_id' => $contact->workspace_id,
+]);
+```
+
+Lo mismo para el «ID para la API» que muestra el panel en Desarrolladores: `forWebhook` es lo que
+vería quien integra, mire quien mire.
+
+Lo de «La lista de claves prohibidas es un piso» sigue valiendo: ids de otra aplicación, nunca; en
+su lugar va el dato público. **Un id opaco es ese dato público**: el mismo en los tres dominios.
+
+**5. La documentación: `DocumentPublicIds`.** Si el dominio publica con Scramble, al lado de
+`AddErrorCode`:
+
+```php
+Scramble::afterOpenApiGenerated(new \Funnelchat\PlatformGate\OpenApi\DocumentPublicIds());
+```
+
+Prendido, cada id sale `string`, con el prefijo en `pattern` y un ejemplo con la forma de un id
+(que no decodifica a nada). Reconoce como id:
+
+- los parámetros de ruta que la ruta declara en `public-ids`;
+- los campos y parámetros de consulta `<tipo>_id` y `<tipo>_ids` (una lista) de cada tipo
+  registrado;
+- lo que el dominio declara en `public_ids.document`: `'ContactResource.id' => 'contact'` (el `id`
+  de ese esquema), `'number_id' => 'device'` (ese nombre en cualquier lado), `'plan_id' => null`
+  (ese nombre no es un id).
+
+Sólo reescribe lo que se documenta como entero o como texto sin formato; un objeto con ese nombre
+queda como estaba. Apagado, lo que Scramble deduce de `forResponse` (`integer | string`) vuelve a
+`integer`: la documentación queda como antes. Un id que no reconoce queda `integer | string`, y
+declararlo en `document` lo resuelve.
+
+**Lo que no cambia.** `api_call_log` y `CreatedResource` guardan la clave interna —el entero—, como
+siempre: son para soporte, no para quien integra. El `X-Workspace-Id` y `workspace_id` tampoco.
+
+```php
+PublicIds::enabled(): bool
+PublicIds::encode(string $type, int $id): string                     // siempre opaco
+PublicIds::decode(mixed $publicId, string $expectedType): ?int       // no acepta enteros
+PublicIds::forResponse(string $type, int|string $id): int|string
+PublicIds::forResponseOrNull(string $type, int|string|null $id): int|string|null
+PublicIds::forWebhook(string $type, int|string|null $id): int|string|null
+PublicIds::fromRequest(string $type, mixed $value): mixed
+```
+
+`encode` y `decode` son el codificador a secas: no miran el ajuste ni quién llama. Un tipo que no
+está registrado tira `InvalidArgumentException`: es un error del código, no del pedido.
+
+---
+
+## Actualizar desde 0.11
+
+Versión **0.12.0**. Sin migraciones y **sin cambios mientras `public_ids.enabled` esté apagado**,
+que es el valor por defecto: ni respuestas, ni encabezados, ni la especificación. Es MINOR porque
+suma una capacidad que, prendida, cambia todos los ids de la API.
+
+0.12.0 va después de 0.11.0. Un dominio que todavía está en 0.10.x sigue antes «Actualizar desde 0.10.0».
+
+**Por qué.** La API pública expone ids enteros correlativos: 27 de los 32 parámetros de ruta de la
+especificación v0.6.19, más los ids de cuerpos, respuestas y 57 webhooks. Revelan el volumen y el
+crecimiento del negocio, se adivinan —si alguna vez falla la autorización, se explotan recorriendo
+1, 2, 3…— y no dicen de qué tipo son. La autorización ya responde 404 a lo ajeno (contrato
+`1113-errores-y-limites`); los ids opacos son una capa más. Lo decidió el `/grilling` del 14-11-2026
+(Q1–Q15, `grilling-ids-opacos-1411.md`), y lo fija el contrato `1411-ids-opacos` v0.1 (commit
+`c931c13` del repo de coordinación), iniciativa api-abierta. platform-gate es el proveedor: se
+despliega primero, y los tres dominios adoptan después.
+
+**Qué hay de nuevo** (ver «Ids públicos»):
+
+- `PublicIds`, con lo que usa el dominio: `forResponse`, `forResponseOrNull`, `forWebhook`,
+  `fromRequest`, `encode`, `decode`, `enabled`.
+- `ResolvePublicIds`, el middleware `public-ids` para los parámetros de ruta. Se pone solo antes de
+  `SubstituteBindings`.
+- `PublicIdCodec`, `PublicIdTypes` (la tabla de prefijos) y `PublicIdSettings`.
+- `OpenApi\DocumentPublicIds`, el transformador de Scramble.
+- `public_ids` en la config, con cuatro variables nuevas: `PLATFORM_GATE_PUBLIC_IDS_ENABLED`,
+  `PLATFORM_GATE_PUBLIC_ID_KEYS`, `PLATFORM_GATE_PUBLIC_ID_CURRENT_KEY` y
+  `PLATFORM_GATE_PUBLIC_IDS_ACCEPT_LEGACY_UNTIL`.
+- El portero: con el ajuste prendido y la config ilegible, 500 `gate_misconfigured` a las keys; y
+  `Deprecation` y `Sunset` en la respuesta de una llamada que usó un entero mientras rige la
+  ventana.
+- `tests/vectors/public-ids.json`: los vectores del formato.
+
+**Antes de subir, en el dominio:** nada, si queda apagado. Si la config del dominio está publicada
+(`config/platform-gate.php`), `public_ids` llega igual con sus valores por defecto; copiar el bloque
+nuevo es para tenerlo a la vista.
+
+**Para adoptarlo** (con el ajuste apagado, en el mismo cambio o después):
+
+1. Los Resources, las rutas, los FormRequests, los filtros y los webhooks, como dice «Cómo lo adopta
+   un dominio». Todos los ids enteros que aparecen en la API pública, **propios y ajenos**.
+2. Los tipos propios que falten en la tabla, en `public_ids.types`, con prefijo acordado con la
+   coordinación.
+3. `DocumentPublicIds` y lo que haga falta en `public_ids.document`, si publica con Scramble. Que los
+   textos de la documentación no digan que un id es un número.
+4. Tests del dominio con el ajuste **prendido**: ningún entero propio en las respuestas ni los
+   webhooks de una key; un id inválido en ruta da 404 `not_found`; el panel sigue con enteros.
+
+**Cómo subir.** Cambiar la restricción a `^0.12` y `composer update funnelchat20/platform-gate`.
+
+**Orden** (el del contrato):
+
+1. Se publica 0.12.0.
+2. accounts, communities y conversations suben y adoptan, **con el ajuste apagado**, en cualquier
+   orden. Los cuatro en producción así.
+3. **La activación, a una hora fijada:** la misma `PLATFORM_GATE_PUBLIC_ID_KEYS` en los tres,
+   `PLATFORM_GATE_PUBLIC_IDS_ACCEPT_LEGACY_UNTIL` = activación + 30 días, y
+   `PLATFORM_GATE_PUBLIC_IDS_ENABLED=true` en los tres a la vez. Si uno queda atrás, sus ids salen
+   enteros y los ids opacos de los otros no le sirven en sus rutas.
+4. El mismo día: el portal v0.7.0 y las herramientas (Node 0.7.0, PHP 0.6.0, Python 0.6.0, CLI 0.5.0,
+   sandbox 0.6.0, n8n 0.4.0).
 
 ---
 

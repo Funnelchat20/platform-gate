@@ -259,4 +259,51 @@ return [
     */
     'account_resolver' => null,
 
+    /*
+    |---------------------------------------------------------------------------
+    | Ids públicos opacos (0.12.0, contrato `1411-ids-opacos`)
+    |---------------------------------------------------------------------------
+    | Prendido, una llamada con key ve `ctc_A3kTMd9qX0bVwYJ2pLr8NzQ` donde hoy ve `5`, en
+    | rutas, cuerpos, filtros y respuestas, y los webhooks salen igual. El panel sigue con
+    | enteros. **Apagado, nada cambia.** Se prende a la vez en los tres dominios.
+    |
+    | Ver «Ids públicos» en el README: cómo lo adopta el dominio (Resources, rutas, cuerpos,
+    | webhooks y Scramble).
+    */
+    'public_ids' => [
+
+        'enabled' => (bool) env('PLATFORM_GATE_PUBLIC_IDS_ENABLED', false),
+
+        // `A=<64 hex>,B=<64 hex>`: versión (un carácter, `A` la primera) => clave de 32 bytes
+        // (`openssl rand -hex 32`). LA MISMA en los tres dominios: si no, el `device_id` que
+        // devuelve accounts no es el que acepta conversations. Nunca en código ni en logs.
+        'keys' => env('PLATFORM_GATE_PUBLIC_ID_KEYS'),
+
+        // La versión con la que se codifica; las demás sólo decodifican. Vacío = la más alta.
+        // Para rotar sin cortar: 1) agregar la clave nueva en los tres dominios con ésta fija en
+        // la vieja; 2) pasar ésta a la nueva en los tres. Cambiar de versión cambia todos los
+        // ids que salen; los viejos se siguen aceptando mientras su clave esté en la lista.
+        'current_key' => env('PLATFORM_GATE_PUBLIC_ID_CURRENT_KEY'),
+
+        // Hasta cuándo un entero en un pedido de una key se sigue aceptando, con `Deprecation`
+        // y `Sunset` en la respuesta. `2026-12-14` = las 00:00 UTC de ese día; también
+        // `2026-12-14T15:00:00Z`. Vacío = nunca: un entero es un id inválido.
+        'accept_legacy_until' => env('PLATFORM_GATE_PUBLIC_IDS_ACCEPT_LEGACY_UNTIL'),
+
+        // Los tipos propios del dominio, además de la tabla base (`PublicIdTypes::BASE`):
+        // nombre => prefijo de tres letras. Un tipo nuevo se acuerda con la coordinación, con un
+        // prefijo que nadie use. Un tipo base no puede cambiar de prefijo.
+        'types' => [
+            // 'invoice' => 'inv',
+        ],
+
+        // Sólo para la documentación (`OpenApi\DocumentPublicIds`): campos y parámetros que son
+        // ids y que no se llaman `<tipo>_id`. `'ContactResource.id' => 'contact'` es el `id` de
+        // ese esquema; `'number_id' => 'device'`, ese nombre en cualquier lado.
+        'document' => [
+            // 'ContactResource.id' => 'contact',
+        ],
+
+    ],
+
 ];
