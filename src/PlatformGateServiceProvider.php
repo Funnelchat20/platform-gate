@@ -11,15 +11,21 @@ use Funnelchat\PlatformGate\Caller\KindColumnProbe;
 use Funnelchat\PlatformGate\Console\PurgeUsageCommand;
 use Funnelchat\PlatformGate\Edge\EdgeTrust;
 use Funnelchat\PlatformGate\Http\Middleware\PlatformGate;
+use Funnelchat\PlatformGate\Http\Middleware\ResolvePublicIds;
 use Funnelchat\PlatformGate\Http\RequestId;
 use Funnelchat\PlatformGate\Limits\DailyCallCap;
 use Funnelchat\PlatformGate\Permissions\PermissionChecker;
 use Funnelchat\PlatformGate\Permissions\RoutePermissions;
+use Funnelchat\PlatformGate\PublicIds\LegacyIdContext;
+use Funnelchat\PlatformGate\PublicIds\PublicIdSettings;
 use Funnelchat\PlatformGate\Usage\ApiCallRecorder;
 use Funnelchat\PlatformGate\Usage\CreatedResourceContext;
 use Illuminate\Contracts\Auth\Factory as AuthFactory;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
+use Illuminate\Contracts\Http\Kernel as HttpKernelContract;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Foundation\Http\Kernel as HttpKernel;
+use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
 use Psr\Log\LoggerInterface;
@@ -38,6 +44,14 @@ final class PlatformGateServiceProvider extends ServiceProvider
         // Lo que creó la llamada, también del request (0.8). No en los atributos del pedido:
         // el FormRequest del controlador es una copia y el portero no la ve.
         $this->app->scoped(CreatedResourceContext::class);
+
+        // Los ids públicos (0.12.0). Los ajustes se leen una vez y nunca tiran al leerse: lo que
+        // no se puede usar se dice recién cuando hace falta. Si un pedido usó un entero, es del
+        // request, como lo anterior.
+        $this->app->singleton(PublicIdSettings::class, fn ($app) => PublicIdSettings::fromConfig(
+            $app['config']->get('platform-gate.public_ids', [])
+        ));
+        $this->app->scoped(LegacyIdContext::class);
 
         $this->app->singleton(PermissionChecker::class);
 
@@ -127,6 +141,8 @@ final class PlatformGateServiceProvider extends ServiceProvider
             (string) ($app['config']->get('platform-gate.public_url') ?: 'https://api.funnelchat.com'),
             $app->make(RequestId::class),
             $app->make(CreatedResourceContext::class),
+            $app->make(PublicIdSettings::class),
+            $app->make(LegacyIdContext::class),
         ));
     }
 
@@ -142,7 +158,37 @@ final class PlatformGateServiceProvider extends ServiceProvider
             $this->commands([PurgeUsageCommand::class]);
         }
 
-        $this->app->make(Router::class)->aliasMiddleware('platform-gate', PlatformGate::class);
+        $router = $this->app->make(Router::class);
+        $router->aliasMiddleware('platform-gate', PlatformGate::class);
+        $router->aliasMiddleware('public-ids', ResolvePublicIds::class);
+
+        $this->resolvePublicIdsBeforeBindings();
+    }
+
+    /**
+     * `ResolvePublicIds` tiene que correr antes que `SubstituteBindings`: si no, el binding busca
+     * `ctc_…` en la base y da 404 antes de que el id se pueda leer (0.12.0). Lo pone justo antes
+     * en la lista de prioridad del kernel, sin mover nada más. Queda después de la autenticación,
+     * que en la lista de Laravel va antes del binding.
+     *
+     * Después de la configuración del dominio: si `bootstrap/app.php` reemplaza la lista con
+     * `priority([...])`, eso corre al resolverse el kernel, antes que esto.
+     */
+    private function resolvePublicIdsBeforeBindings(): void
+    {
+        $prioritize = static function (mixed $kernel): void {
+            if ($kernel instanceof HttpKernel) {
+                $kernel->addToMiddlewarePriorityBefore(SubstituteBindings::class, ResolvePublicIds::class);
+            }
+        };
+
+        if ($this->app->resolved(HttpKernelContract::class)) {
+            $prioritize($this->app->make(HttpKernelContract::class));
+
+            return;
+        }
+
+        $this->app->afterResolving(HttpKernelContract::class, $prioritize);
     }
 
     /**

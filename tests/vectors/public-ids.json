@@ -1,0 +1,42 @@
+{
+  "_doc": "Vectores de los ids públicos de Funnelchat (contrato 1411-ids-opacos). Son un contrato: los usan los tests de platform-gate (PublicIdVectorsTest), y los tiene que pasar cualquier otra implementación (el gate en Python). Cambian sólo con una versión nueva de platform-gate y una nota en su README. Las claves son de prueba.",
+  "since": "0.12.0",
+  "format": "<prefijo>_<versión><cuerpo>: prefijo de 3 letras minúsculas, versión de 1 carácter del alfabeto, cuerpo de 22 caracteres del alfabeto.",
+  "alphabet": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+  "algorithm": "bloque = prefijo (3 bytes ASCII) + entero (8 bytes, sin signo, big-endian) + 5 bytes en cero. cifrado = AES-256-ECB(clave de la versión, bloque), sin relleno. cuerpo = el cifrado como entero sin signo big-endian de 128 bits, en base62 con el alfabeto (A = 0), completado a 22 caracteres con A a la izquierda.",
+  "decode": "Válido sólo si: el texto tiene 27 caracteres, empieza con el prefijo esperado y '_', la versión es una de las claves, el cuerpo son 22 caracteres del alfabeto con un valor menor que 2^128, y al descifrar el bloque trae el prefijo esperado, los 5 ceros y un entero entre 1 y 2^63-1. Si no, null.",
+  "keys": {
+    "A": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "B": "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100"
+  },
+  "types": {
+    "contact": "ctc",
+    "device": "dev",
+    "message": "msg",
+    "webhook_subscription": "whk"
+  },
+  "encode": [
+    {"name": "el primer contacto", "version": "A", "type": "contact", "id": 1, "public_id": "ctc_ABsza6Ialu1BCUyPFZ8WJvV"},
+    {"name": "el siguiente no se le parece", "version": "A", "type": "contact", "id": 2, "public_id": "ctc_ABKTi4P0XyrUSSZUAcCrFBd"},
+    {"name": "el mismo entero, otro tipo", "version": "A", "type": "device", "id": 1, "public_id": "dev_AHHFAufq3rZqgy5vEPFN2zr"},
+    {"name": "un contacto cualquiera", "version": "A", "type": "contact", "id": 104816, "public_id": "ctc_AHNivoHsk7UWVIP69PF644M"},
+    {"name": "el entero más grande; el cuerpo empieza con A de relleno", "version": "A", "type": "message", "id": 9223372036854775807, "public_id": "msg_AA0MMJCb95grYs1eIgriZiZ"},
+    {"name": "una suscripción de webhook", "version": "A", "type": "webhook_subscription", "id": 7, "public_id": "whk_AG4PLTVCzccqCNnk5zCl417"},
+    {"name": "el primer contacto con la clave B", "version": "B", "type": "contact", "id": 1, "public_id": "ctc_BEsnMskeIo11XEMBlGzprQQ"}
+  ],
+  "decode_invalid": [
+    {"name": "un contacto leído como número", "type": "device", "public_id": "ctc_ABsza6Ialu1BCUyPFZ8WJvV"},
+    {"name": "el prefijo de afuera cambiado: el de adentro no coincide", "type": "device", "public_id": "dev_ABsza6Ialu1BCUyPFZ8WJvV"},
+    {"name": "el último carácter cambiado", "type": "contact", "public_id": "ctc_ABsza6Ialu1BCUyPFZ8WJvW"},
+    {"name": "el primer carácter del cuerpo cambiado", "type": "contact", "public_id": "ctc_ACsza6Ialu1BCUyPFZ8WJvV"},
+    {"name": "una versión de clave que no existe", "type": "contact", "public_id": "ctc_CBsza6Ialu1BCUyPFZ8WJvV"},
+    {"name": "un id de la clave A con la versión B", "type": "contact", "public_id": "ctc_BBsza6Ialu1BCUyPFZ8WJvV"},
+    {"name": "más de 128 bits", "type": "contact", "public_id": "ctc_A9999999999999999999999"},
+    {"name": "un carácter fuera del alfabeto", "type": "contact", "public_id": "ctc_ABsza6Ialu1BCUyPFZ8WJv-"},
+    {"name": "un carácter de menos", "type": "contact", "public_id": "ctc_ABsza6Ialu1BCUyPFZ8WJv"},
+    {"name": "un carácter de más", "type": "contact", "public_id": "ctc_ABsza6Ialu1BCUyPFZ8WJvVA"},
+    {"name": "el prefijo en mayúsculas", "type": "contact", "public_id": "CTC_ABsza6Ialu1BCUyPFZ8WJvV"},
+    {"name": "el entero", "type": "contact", "public_id": "1"},
+    {"name": "vacío", "type": "contact", "public_id": ""}
+  ]
+}

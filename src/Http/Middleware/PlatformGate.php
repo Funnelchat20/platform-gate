@@ -20,6 +20,8 @@ use Funnelchat\PlatformGate\Http\RequestId;
 use Funnelchat\PlatformGate\Limits\DailyCallCap;
 use Funnelchat\PlatformGate\Permissions\PermissionChecker;
 use Funnelchat\PlatformGate\Permissions\RoutePermissions;
+use Funnelchat\PlatformGate\PublicIds\LegacyIdContext;
+use Funnelchat\PlatformGate\PublicIds\PublicIdSettings;
 use Funnelchat\PlatformGate\Usage\ApiCall;
 use Funnelchat\PlatformGate\Usage\ApiCallRecorder;
 use Funnelchat\PlatformGate\Usage\CreatedResource;
@@ -56,6 +58,10 @@ final class PlatformGate
 
     private readonly CreatedResourceContext $resources;
 
+    private readonly PublicIdSettings $publicIds;
+
+    private readonly LegacyIdContext $legacyIds;
+
     public function __construct(
         private readonly CallerContext $context,
         private readonly RoutePermissions $routes,
@@ -73,12 +79,16 @@ final class PlatformGate
         private readonly string $publicUrl = 'https://api.funnelchat.com',
         ?RequestId $requestIds = null,
         ?CreatedResourceContext $resources = null,
+        ?PublicIdSettings $publicIds = null,
+        ?LegacyIdContext $legacyIds = null,
     ) {
-        // Al final y opcionales (0.8): un `new PlatformGate(...)` armado como en 0.7.1 sigue
+        // Al final y opcionales (0.8, 0.12): un `new PlatformGate(...)` armado como en 0.7.1 sigue
         // andando. Sin pasarlos, salen del contenedor —el singleton de `RequestId`, el mismo de
         // `TrustEdge` y el 401, y el contexto del request en curso—; nunca se construyen acá.
         $this->requestIds = $requestIds ?? Container::getInstance()->make(RequestId::class);
         $this->resources = $resources ?? Container::getInstance()->make(CreatedResourceContext::class);
+        $this->publicIds = $publicIds ?? Container::getInstance()->make(PublicIdSettings::class);
+        $this->legacyIds = $legacyIds ?? Container::getInstance()->make(LegacyIdContext::class);
     }
 
     public function handle(Request $request, Closure $next): Response
@@ -101,7 +111,7 @@ final class PlatformGate
         try {
             $this->classify($request, $fromEdge);
         } catch (GateException $e) {
-            return $this->requestIds->stamp($request, $this->reject($e));
+            return $this->requestIds->stamp($request, $this->legacyIds->stamp($this->reject($e), $this->publicIds));
         }
 
         $response = $next($request);
@@ -112,6 +122,10 @@ final class PlatformGate
         if ($this->context->isMachine()) {
             $response = ErrorBody::complete($response);
         }
+
+        // Un entero donde va un id público, aceptado porque rige `accept_legacy_until` (0.12.0):
+        // en la ruta, en el cuerpo o en un filtro. Sólo lo marca una llamada con key.
+        $response = $this->legacyIds->stamp($response, $this->publicIds);
 
         return $this->requestIds->stamp($request, $response);
     }
@@ -126,6 +140,7 @@ final class PlatformGate
         // controlador: sale sin recurso.
         $resource = $this->resources->get();
         $this->resources->clear();
+        $this->legacyIds->clear();
 
         try {
             $this->recordCall($request, $response, $resource);
@@ -280,6 +295,17 @@ final class PlatformGate
 
         $required = $this->routes->requiredFor($request);
         $this->permissions->assert($token, $required);
+
+        // Ids públicos prendidos con claves, fecha o tipos que no se pueden usar (0.12.0): no hay
+        // forma de dar ni de leer un id. Dejar pasar daría enteros a una key o rechazaría ids
+        // válidos como inexistentes; es config del dominio, y esperar no la arregla.
+        if ($this->publicIds->enabled && $this->publicIds->problem() !== null) {
+            $this->logger->error('platform-gate: los ids públicos están prendidos y su configuración no se puede usar', [
+                'problem' => $this->publicIds->problem(),
+            ]);
+
+            throw new GateMisconfigured('public_ids');
+        }
 
         // Antes del tope: un rechazo por no poder leer el workspace no le gasta una llamada a nadie.
         $workspaceId = $this->readWorkspace($token);
